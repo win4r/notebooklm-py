@@ -158,6 +158,69 @@ await client.sources.add_text(nb_id, "My Notes", content)
 
 ---
 
+### Protected Website Content Issues
+
+#### X.com / Twitter content incorrectly parsed as error page
+
+**Symptoms:**
+- Source title shows "Fixing X.com Privacy Errors" or similar error message
+- Generated content discusses browser extensions instead of the actual article
+- Source appears to process successfully but contains wrong content
+
+**Cause:** X.com (Twitter) has aggressive anti-scraping protections. When NotebookLM attempts to fetch the URL, it receives an error page or compatibility warning instead of the actual content.
+
+**Solution - Use `bird` CLI to pre-fetch content:**
+
+The `bird` CLI can fetch X.com content and output clean markdown:
+
+```bash
+# Step 1: Install bird (macOS/Linux)
+brew install steipete/tap/bird
+
+# Step 2: Fetch X.com content as markdown
+bird read "https://x.com/username/status/1234567890" > article.md
+
+# Step 3: Add the local markdown file to NotebookLM
+notebooklm source add ./article.md
+```
+
+**Alternative methods:**
+
+**Using browser automation:**
+```bash
+# If you have playwright/browser-use available
+# Fetch content via browser and save as markdown
+```
+
+**Manual extraction:**
+1. Open the X.com post in a browser
+2. Copy the text content
+3. Save to a `.md` file
+4. Add the file to NotebookLM
+
+**Verification:**
+
+Always verify the source was correctly parsed:
+```bash
+notebooklm source list
+# Check that the title matches the actual article, not an error message
+```
+
+If the title contains error-related text, remove the source and use the pre-fetch method:
+```bash
+# Remove incorrectly parsed source
+notebooklm source delete <source_id>
+
+# Then re-add using the bird CLI method above
+```
+
+**Other affected sites:**
+- Some paywalled news sites
+- Sites requiring JavaScript execution for content
+- Sites with aggressive bot detection
+
+---
+
 ## Known Limitations
 
 ### Rate Limiting
