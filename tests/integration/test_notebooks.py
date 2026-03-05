@@ -1,10 +1,12 @@
 """Integration tests for NotebooksAPI."""
 
+import json
+
 import pytest
 from pytest_httpx import HTTPXMock
 
 from notebooklm import Notebook, NotebookLMClient
-from notebooklm.rpc import RPCMethod
+from notebooklm.rpc import RPCError, RPCMethod
 
 
 class TestListNotebooks:
@@ -390,6 +392,75 @@ class TestNotebooksAPIAdditional:
         assert description.suggested_topics[0].prompt == "Explain the key findings"
 
 
+class TestGetNotebookFailures:
+    """Integration tests reproducing Issue #114 GET_NOTEBOOK failures.
+
+    Exercises the full NotebookLMClient → rpc_call → decode_response pipeline
+    with injected HTTP responses matching each failure scenario from Issue #114.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_response_body(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Scenario A: Server returns empty body after anti-XSSI prefix."""
+        raw = b")]}'\n"
+        httpx_mock.add_response(content=raw)
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match="response contained no RPC data"):
+                await client.notebooks.get("nb_123")
+
+    @pytest.mark.asyncio
+    async def test_non_rpc_json_response(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Scenario B: Server returns JSON chunks but no RPC data."""
+        chunk = json.dumps({"error": "something"})
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n".encode()
+        httpx_mock.add_response(content=raw)
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match="response contained no RPC data"):
+                await client.notebooks.get("nb_123")
+
+    @pytest.mark.asyncio
+    async def test_null_result_data(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Scenario C: wrb.fr matches GET_NOTEBOOK ID but result_data is None."""
+        rpc_id = RPCMethod.GET_NOTEBOOK.value
+        chunk = json.dumps(["wrb.fr", rpc_id, None, None, None, None])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n".encode()
+        httpx_mock.add_response(content=raw)
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match="returned null result data"):
+                await client.notebooks.get("nb_123")
+
+    @pytest.mark.asyncio
+    async def test_short_wrb_fr_item(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Scenario D: wrb.fr item has only 2 elements (skipped by extract)."""
+        rpc_id = RPCMethod.GET_NOTEBOOK.value
+        chunk = json.dumps(["wrb.fr", rpc_id])
+        raw = f")]}}'\n{len(chunk)}\n{chunk}\n".encode()
+        httpx_mock.add_response(content=raw)
+
+        async with NotebookLMClient(auth_tokens) as client:
+            with pytest.raises(RPCError, match="returned null result data"):
+                await client.notebooks.get("nb_123")
+
+
 class TestNotebookEdgeCases:
     """Test edge cases for NotebooksAPI."""
 
@@ -493,26 +564,131 @@ class TestNotebookEdgeCases:
         assert description.suggested_topics[0].question == "Valid question"
 
 
-class TestNotebooksAPIErrors:
-    """Error handling tests for NotebooksAPI."""
+class TestDescribeEdgeCases:
+    """Tests for get_description() branch edge cases."""
 
     @pytest.mark.asyncio
-    async def test_get_notebook_empty_list_response(
+    async def test_get_description_no_topics_key(
         self,
         auth_tokens,
         httpx_mock: HTTPXMock,
         build_rpc_response,
     ):
-        """Test handling empty list response from server."""
-        # Server returns empty list when notebook has no data
-        response = build_rpc_response(RPCMethod.GET_NOTEBOOK, [[]])
+        """Line 171->188: result has only [0] (no result[1]) so topics stay empty."""
+        # result = [["A summary"]] — len is 1, so result[1] branch is never entered
+        response = build_rpc_response(
+            RPCMethod.SUMMARIZE,
+            [["A summary"]],
+        )
         httpx_mock.add_response(content=response.encode())
 
         async with NotebookLMClient(auth_tokens) as client:
-            result = await client.notebooks.get("nb_123")
+            description = await client.notebooks.get_description("nb_123")
 
-        # Current behavior: empty response creates Notebook with empty values
-        # Note: Ideally this would return None, but this test documents actual behavior
-        assert result is not None
-        assert result.id == ""
-        assert result.title == ""
+        assert description.summary == "A summary"
+        assert description.suggested_topics == []
+
+    @pytest.mark.asyncio
+    async def test_get_description_result_1_is_empty_list(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 173->177: result[1] exists but is an empty list, so inner block skipped."""
+        # result = [["A summary"], []] — result[1] has len 0, so the inner if is false
+        response = build_rpc_response(
+            RPCMethod.SUMMARIZE,
+            [["A summary"], []],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            description = await client.notebooks.get_description("nb_123")
+
+        assert description.summary == "A summary"
+        assert description.suggested_topics == []
+
+    @pytest.mark.asyncio
+    async def test_get_description_result_1_not_list(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 173->177: result[1] is present but not a list, inner block skipped."""
+        # result = [["A summary"], "not-a-list"]
+        response = build_rpc_response(
+            RPCMethod.SUMMARIZE,
+            [["A summary"], "not-a-list"],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            description = await client.notebooks.get_description("nb_123")
+
+        assert description.summary == "A summary"
+        assert description.suggested_topics == []
+
+
+class TestShareEdgeCases:
+    """Tests for share() and get_share_url() branch edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_share_with_artifact_id(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 260: share() public=True with artifact_id builds deep-link URL."""
+        response = build_rpc_response(RPCMethod.SHARE_ARTIFACT, None)
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.notebooks.share("nb_123", public=True, artifact_id="art_456")
+
+        assert result["public"] is True
+        assert result["url"] == "https://notebooklm.google.com/notebook/nb_123?artifactId=art_456"
+        assert result["artifact_id"] == "art_456"
+
+    @pytest.mark.asyncio
+    async def test_share_public_false_returns_none_url(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 264: share() public=False sets url to None."""
+        response = build_rpc_response(RPCMethod.SHARE_ARTIFACT, None)
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.notebooks.share("nb_123", public=False)
+
+        assert result["public"] is False
+        assert result["url"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_share_url_without_artifact(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Line 288: get_share_url() without artifact_id returns base URL."""
+        async with NotebookLMClient(auth_tokens) as client:
+            url = client.notebooks.get_share_url("nb_123")
+
+        assert url == "https://notebooklm.google.com/notebook/nb_123"
+
+    @pytest.mark.asyncio
+    async def test_get_share_url_with_artifact(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+    ):
+        """Lines 285-287: get_share_url() with artifact_id appends query param."""
+        async with NotebookLMClient(auth_tokens) as client:
+            url = client.notebooks.get_share_url("nb_123", artifact_id="art_789")
+
+        assert url == "https://notebooklm.google.com/notebook/nb_123?artifactId=art_789"

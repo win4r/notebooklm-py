@@ -1,6 +1,6 @@
 [project]
 name = "notebooklm-py"
-version = "0.3.2"
+version = "0.3.3"
 description = "Unofficial Python library for automating Google NotebookLM"
 dynamic = ["readme"]
 requires-python = ">=3.10"
@@ -105,7 +105,7 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 70
+fail_under = 90
 
 [tool.mypy]
 python_version = "3.10"
@@ -145,7 +145,7 @@ ignore = [
     "SIM102", # nested ifs - kept for readability in complex data parsing
     "SIM105", # contextlib.suppress - explicit try/except clearer for data parsing
 ]
-per-file-ignores = {"src/notebooklm/__init__.py" = ["E402"]}
+per-file-ignores = {"src/notebooklm/__init__.py" = ["E402"], "src/notebooklm/notebooklm_cli.py" = ["E402"]}
 
 [tool.ruff.lint.isort]
 known-first-party = ["notebooklm"]

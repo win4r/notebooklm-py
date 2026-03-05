@@ -4,6 +4,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from notebooklm import NotebookLMClient
+from notebooklm.rpc import RPCMethod
 
 
 class TestResearchAPI:
@@ -244,3 +245,454 @@ class TestResearchAPI:
             result = await client.research.import_sources("nb_123", "task_123", [])
 
         assert result == []
+
+
+class TestPollEdgeCases:
+    """Tests for poll() parsing branch edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_poll_unwrap_nested_result(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 132: result[0] is a list whose first element is also a list — unwrap one level."""
+        # Outer list wraps the inner task list: result[0][0] is a list → unwrap
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [
+                [
+                    [
+                        "task_wrap",
+                        [None, ["wrapped query"], None, [], 1],
+                    ]
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["task_id"] == "task_wrap"
+        assert result["query"] == "wrapped query"
+
+    @pytest.mark.asyncio
+    async def test_poll_skips_non_list_task_data(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 137: task_data is not a list — continue, eventually return no_research."""
+        # Outer list contains a non-list item then a too-short list
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            ["not_a_list", ["only_one_elem"]],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "no_research"
+
+    @pytest.mark.asyncio
+    async def test_poll_skips_non_string_task_id(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 143: task_id is not str — continue, eventually return no_research."""
+        # task_id is an integer (not str) and task_info is a list
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [[42, [None, ["query"], None, [], 1]]],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "no_research"
+
+    @pytest.mark.asyncio
+    async def test_poll_skips_non_list_task_info(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 143: task_info is not a list — continue, eventually return no_research."""
+        # task_id is str but task_info is a string, not list
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [["task_bad", "not_a_list"]],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "no_research"
+
+    @pytest.mark.asyncio
+    async def test_poll_sources_and_summary_has_only_sources_no_summary(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 157->160: sources_and_summary has len 1 (sources only, no summary string)."""
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [
+                [
+                    "task_nosummary",
+                    [
+                        None,
+                        ["no summary query"],
+                        None,
+                        [
+                            [
+                                ["https://example.com", "Title", "desc"],
+                            ]
+                            # No second element — summary is absent
+                        ],
+                        2,
+                    ],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "completed"
+        assert result["summary"] == ""
+        assert len(result["sources"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_poll_skips_short_source_entry(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 163: a source entry in sources_data is too short (len < 2) — skipped."""
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [
+                [
+                    "task_shortsrc",
+                    [
+                        None,
+                        ["short src query"],
+                        None,
+                        [
+                            [
+                                ["only_one_element"],  # len < 2 → skipped
+                                ["https://valid.com", "Valid"],  # kept
+                            ],
+                            "Summary text",
+                        ],
+                        2,
+                    ],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        # Only the valid source is returned
+        assert len(result["sources"]) == 1
+        assert result["sources"][0]["url"] == "https://valid.com"
+
+    @pytest.mark.asyncio
+    async def test_poll_deep_research_source_none_first_element(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Lines 171-172: deep research source where src[0] is None — title extracted, url=''."""
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [
+                [
+                    "task_deep",
+                    [
+                        None,
+                        ["deep query"],
+                        None,
+                        [
+                            [
+                                [None, "Deep Research Title", None, "web"],
+                            ],
+                            "Deep summary",
+                        ],
+                        2,
+                    ],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "completed"
+        assert len(result["sources"]) == 1
+        assert result["sources"][0]["title"] == "Deep Research Title"
+        assert result["sources"][0]["url"] == ""
+
+    @pytest.mark.asyncio
+    async def test_poll_fast_research_source_with_url(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Lines 173-175: fast research source where src[0] is a str URL."""
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [
+                [
+                    "task_fast",
+                    [
+                        None,
+                        ["fast query"],
+                        None,
+                        [
+                            [
+                                ["https://fast.example.com", "Fast Title", "desc", "web"],
+                            ],
+                            "Fast summary",
+                        ],
+                        1,
+                    ],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "in_progress"
+        assert result["sources"][0]["url"] == "https://fast.example.com"
+        assert result["sources"][0]["title"] == "Fast Title"
+
+    @pytest.mark.asyncio
+    async def test_poll_source_with_no_title_or_url_skipped(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 177->161: src has two elements but neither is title nor url — not appended."""
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [
+                [
+                    "task_empty_src",
+                    [
+                        None,
+                        ["empty src query"],
+                        None,
+                        [
+                            [
+                                # src[0] is not None and not str (e.g. integer), len < 3
+                                # so url="", title="" and nothing is appended
+                                [42, 99],
+                            ],
+                            "summary here",
+                        ],
+                        2,
+                    ],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "completed"
+        assert result["sources"] == []
+
+    @pytest.mark.asyncio
+    async def test_poll_all_tasks_invalid_returns_no_research(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 193: all items in the loop fail validation — final no_research is returned."""
+        # All task_data entries are short lists (len < 2) so every iteration hits `continue`
+        response = build_rpc_response(
+            RPCMethod.POLL_RESEARCH,
+            [["only_one"], ["also_one"]],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result["status"] == "no_research"
+
+
+class TestImportSourcesEdgeCases:
+    """Tests for import_sources() parsing branch edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_import_sources_skips_no_url_sources(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Lines 226, 228: sources without URLs are skipped; if ALL lack URLs, return []."""
+        # No HTTP call should be made when all sources lack URLs
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.import_sources(
+                "nb_123",
+                "task_123",
+                [{"title": "No URL source"}, {"title": "Also no URL"}],
+            )
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_import_sources_filters_some_no_url(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 226: sources without URLs are filtered, valid ones are imported."""
+        # Double-wrap so the unwrap logic peels one layer: result[0][0] is a list
+        response = build_rpc_response(
+            RPCMethod.IMPORT_RESEARCH,
+            [
+                [
+                    [["src_good"], "Good Source"],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.import_sources(
+                "nb_123",
+                "task_123",
+                [
+                    {"url": "https://good.com", "title": "Good Source"},
+                    {"title": "No URL source"},  # filtered out
+                ],
+            )
+
+        assert len(result) == 1
+        assert result[0]["id"] == "src_good"
+
+    @pytest.mark.asyncio
+    async def test_import_sources_no_double_nesting(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 257->265: result[0][0] is not a list — no unwrap, loop runs on original result.
+
+        The unwrap condition requires result[0][0] to be a list. When result[0][0] is a
+        non-list value (e.g. None), the if-block is skipped and the for loop runs directly.
+        """
+        # result[0] = [None, "Flat Title"] so result[0][0] = None (not a list) → no unwrap
+        # The loop then processes each item in the original result directly.
+        # [None, "Flat Title"] has src_data[0]=None → src_id = None → skipped (covers 270->265)
+        # So we also include a valid entry to verify the loop ran:
+        # However, we need result[0][0] to NOT be a list to avoid unwrap.
+        # A valid entry looks like [["src_id"], "Title"] but result[0][0]=["src_id"] IS a list.
+        # The only way to avoid unwrap AND get results is if result[0] is a list but
+        # result[0][0] is not a list. Use result = ["not_a_list_entry", [["src_nw"], "Title"]].
+        # result[0] = "not_a_list_entry" → isinstance(result[0], list) is False → no unwrap.
+        response = build_rpc_response(
+            RPCMethod.IMPORT_RESEARCH,
+            # result[0] is a string, not a list → isinstance(result[0], list) is False
+            # condition fails → no unwrap → loop runs on the original result
+            ["string_not_list", [["src_nw"], "No-Wrap Title"]],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.import_sources(
+                "nb_123",
+                "task_123",
+                [{"url": "https://nowrap.example.com", "title": "No-Wrap Title"}],
+            )
+
+        # "string_not_list" is not a list → skipped; [["src_nw"], "No-Wrap Title"] is valid
+        assert len(result) == 1
+        assert result[0]["id"] == "src_nw"
+        assert result[0]["title"] == "No-Wrap Title"
+
+    @pytest.mark.asyncio
+    async def test_import_sources_src_data_too_short_skipped(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 266->265: src_data in result has len < 2 — skipped in loop."""
+        # First entry is too short (len 1), second is valid
+        response = build_rpc_response(
+            RPCMethod.IMPORT_RESEARCH,
+            [
+                ["short_only"],  # len 1 — skipped
+                [["src_valid"], "Valid"],  # len 2 — kept
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.import_sources(
+                "nb_123",
+                "task_123",
+                [{"url": "https://example.com", "title": "Valid"}],
+            )
+
+        assert len(result) == 1
+        assert result[0]["id"] == "src_valid"
+
+    @pytest.mark.asyncio
+    async def test_import_sources_src_id_none_skipped(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """Line 270->265: src_data[0] is None (not a list) — src_id is None, entry skipped."""
+        # src_data[0] is None — not a list, so src_id = None → skipped
+        response = build_rpc_response(
+            RPCMethod.IMPORT_RESEARCH,
+            [
+                [None, "Title with no ID"],  # src_data[0] is None → skipped
+                [["src_real"], "Real Title"],  # valid
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.import_sources(
+                "nb_123",
+                "task_123",
+                [{"url": "https://example.com", "title": "anything"}],
+            )
+
+        assert len(result) == 1
+        assert result[0]["id"] == "src_real"

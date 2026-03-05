@@ -57,6 +57,9 @@ POLL_TIMEOUT = 60.0  # Max time to wait for operations
 # Helps avoid API rate limits when running multiple generation tests
 GENERATION_TEST_DELAY = 15.0
 
+# Delay between chat tests (seconds) to avoid API rate limits from rapid ask() calls
+CHAT_TEST_DELAY = 5.0
+
 
 def assert_generation_started(result, artifact_type: str = "Artifact") -> None:
     """Assert that artifact generation started successfully.
@@ -125,31 +128,31 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_runtest_teardown(item, nextitem):
-    """Add delay after generation tests to avoid API rate limits.
+    """Add delay after generation and chat tests to avoid API rate limits.
 
-    This hook runs after each test. If the test is in test_generation.py
-    and uses the generation_notebook_id fixture, add a delay before the
-    next test starts.
+    This hook runs after each test. Adds delays for:
+    - test_generation.py: 15s between generation tests (artifact quotas)
+    - test_chat.py: 5s between chat tests (ask() rate limits)
     """
     import time
 
-    # Only add delay for generation tests
-    if item.path.name != "test_generation.py":
-        return
-
-    # Only add delay if using generation_notebook_id fixture
-    if "generation_notebook_id" not in item.fixturenames:
-        return
-
-    # Only add delay if there's a next test (avoid delay at the end)
     if nextitem is None:
         return
 
-    # Add delay to spread out API calls
-    logging.info(
-        "Delaying %ss between generation tests to avoid rate limiting", GENERATION_TEST_DELAY
-    )
-    time.sleep(GENERATION_TEST_DELAY)
+    if item.path.name == "test_generation.py":
+        if "generation_notebook_id" not in item.fixturenames:
+            return
+        logging.info(
+            "Delaying %ss between generation tests to avoid rate limiting", GENERATION_TEST_DELAY
+        )
+        time.sleep(GENERATION_TEST_DELAY)
+        return
+
+    if item.path.name == "test_chat.py":
+        if "multi_source_notebook_id" not in item.fixturenames:
+            return
+        logging.info("Delaying %ss between chat tests to avoid rate limiting", CHAT_TEST_DELAY)
+        time.sleep(CHAT_TEST_DELAY)
 
 
 # =============================================================================

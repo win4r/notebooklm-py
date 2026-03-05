@@ -9,6 +9,7 @@ Commands:
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -38,7 +39,10 @@ from .helpers import (
     run_async,
     set_current_notebook,
 )
+from .language import set_language
 from .options import json_option
+
+logger = logging.getLogger(__name__)
 
 
 def _display_notebook_context(nb_id: str, title: str, owner: str, created: str) -> None:
@@ -50,6 +54,32 @@ def _display_notebook_context(nb_id: str, title: str, owner: str, created: str) 
     table.add_column("Created", style="dim")
     table.add_row(nb_id, title, owner, created)
     console.print(table)
+
+
+def _sync_server_language_to_config() -> None:
+    """Fetch server language setting and persist to local config.
+
+    Called after login to ensure the local config reflects the server's
+    global language setting. This prevents generate commands from defaulting
+    to 'en' when the user has configured a different language on the server.
+
+    Non-critical: logs errors at debug level to avoid blocking login.
+    """
+
+    async def _fetch():
+        async with await NotebookLMClient.from_storage() as client:
+            return await client.settings.get_output_language()
+
+    try:
+        server_lang = run_async(_fetch())
+        if server_lang:
+            set_language(server_lang)
+    except Exception as e:
+        logger.debug("Failed to sync server language to config: %s", e)
+        console.print(
+            "[dim]Warning: Could not sync language setting. "
+            "Run 'notebooklm language get' to sync manually.[/dim]"
+        )
 
 
 @contextmanager
@@ -216,6 +246,10 @@ def register_session_commands(cli):
             context.close()
 
         console.print(f"\n[green]Authentication saved to:[/green] {storage_path}")
+
+        # Sync server language setting to local config so generate commands
+        # respect the user's global language preference (fixes #121)
+        _sync_server_language_to_config()
 
     @cli.command("use")
     @click.argument("notebook_id")

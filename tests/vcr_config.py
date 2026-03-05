@@ -33,6 +33,7 @@ When to use VCR vs pytest-httpx:
 import os
 import re
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import vcr
 
@@ -165,6 +166,23 @@ def scrub_response(response: dict[str, Any]) -> dict[str, Any]:
 
 
 # =============================================================================
+# Custom VCR Matchers
+# =============================================================================
+
+
+def _rpcids_matcher(r1, r2):
+    """Match requests by the ``rpcids`` query parameter.
+
+    All batchexecute POST requests share the same URL path.  Without this
+    matcher VCR relies on sequential play-count ordering which is fragile
+    (breaks on Windows CI).  Comparing ``rpcids`` makes matching deterministic.
+    """
+    qs1 = parse_qs(urlparse(r1.uri).query)
+    qs2 = parse_qs(urlparse(r2.uri).query)
+    assert qs1.get("rpcids") == qs2.get("rpcids")
+
+
+# =============================================================================
 # VCR Configuration
 # =============================================================================
 
@@ -179,7 +197,8 @@ notebooklm_vcr = vcr.VCR(
     cassette_library_dir="tests/cassettes",
     # Record mode: 'none' = only replay (CI), 'new_episodes' = record if missing
     record_mode=_record_mode,
-    # Match requests by method and path, NOT query params (contain session IDs)
+    # Match requests by method and path, NOT query params (contain session IDs).
+    # For cassettes with multiple POSTs to the same path, add "rpcids" per-cassette.
     match_on=["method", "scheme", "host", "port", "path"],
     # Scrub sensitive data before recording
     before_record_request=scrub_request,
@@ -193,3 +212,6 @@ notebooklm_vcr = vcr.VCR(
     # Decode compressed responses for easier inspection
     decode_compressed_response=True,
 )
+
+# Register custom matcher for rpcids-based request differentiation
+notebooklm_vcr.register_matcher("rpcids", _rpcids_matcher)

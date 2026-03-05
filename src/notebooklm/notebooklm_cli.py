@@ -23,10 +23,17 @@ LLM-friendly design:
   notebooklm ask "what are the key themes?"
 """
 
+# Runtime Python version guard (must run before any PEP 604 syntax is evaluated)
+import sys
+
+from ._version_check import check_python_version as _check_python_version
+
+_check_python_version()
+del _check_python_version
+
 import asyncio
 import logging
 import os
-import sys
 from pathlib import Path
 
 # =============================================================================

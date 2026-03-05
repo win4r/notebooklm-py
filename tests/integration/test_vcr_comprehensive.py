@@ -565,11 +565,12 @@ class TestChatAPI:
     @pytest.mark.vcr
     @pytest.mark.asyncio
     @notebooklm_vcr.use_cassette("chat_get_history.yaml")
-    async def test_get_history(self):
-        """Get chat history."""
+    async def test_get_conversation_id(self):
+        """Get conversation ID."""
         async with vcr_client() as client:
-            history = await client.chat.get_history(MUTABLE_NOTEBOOK_ID)
-        assert isinstance(history, list)
+            conv_id = await client.chat.get_conversation_id(MUTABLE_NOTEBOOK_ID)
+        # May be None if no conversations, or a string UUID
+        assert conv_id is None or isinstance(conv_id, str)
 
 
 # =============================================================================

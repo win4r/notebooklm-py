@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
 import pytest
@@ -601,6 +601,87 @@ class TestAuthCheckCommand:
         assert "Check authentication status" in result.output
         assert "--test" in result.output
         assert "--json" in result.output
+
+
+# =============================================================================
+# LOGIN LANGUAGE SYNC TESTS
+# =============================================================================
+
+
+class TestLoginLanguageSync:
+    """Tests for syncing server language setting to local config after login."""
+
+    @pytest.fixture(autouse=True)
+    def _language_module(self):
+        """Get the actual language module, bypassing Click group shadowing on Python 3.10."""
+        import importlib
+
+        self.language_mod = importlib.import_module("notebooklm.cli.language")
+
+    def test_sync_persists_server_language(self, tmp_path):
+        """After login, server language setting is fetched and saved to local config."""
+        from notebooklm.cli.session import _sync_server_language_to_config
+
+        config_path = tmp_path / "config.json"
+
+        with (
+            patch("notebooklm.cli.session.NotebookLMClient") as mock_client_cls,
+            patch.object(self.language_mod, "get_config_path", return_value=config_path),
+            patch.object(self.language_mod, "get_home_dir"),
+        ):
+            mock_client = create_mock_client()
+            mock_client.settings = MagicMock()
+            mock_client.settings.get_output_language = AsyncMock(return_value="zh_Hans")
+            mock_client_cls.from_storage = AsyncMock(return_value=mock_client)
+
+            _sync_server_language_to_config()
+
+        # Verify language was persisted to config
+        config = json.loads(config_path.read_text())
+        assert config["language"] == "zh_Hans"
+
+    def test_sync_skips_when_server_returns_none(self, tmp_path):
+        """No config change when server returns no language."""
+        from notebooklm.cli.session import _sync_server_language_to_config
+
+        config_path = tmp_path / "config.json"
+
+        with (
+            patch("notebooklm.cli.session.NotebookLMClient") as mock_client_cls,
+            patch.object(self.language_mod, "get_config_path", return_value=config_path),
+        ):
+            mock_client = create_mock_client()
+            mock_client.settings = MagicMock()
+            mock_client.settings.get_output_language = AsyncMock(return_value=None)
+            mock_client_cls.from_storage = AsyncMock(return_value=mock_client)
+
+            _sync_server_language_to_config()
+
+        # Config file should not exist
+        assert not config_path.exists()
+
+    def test_sync_does_not_raise_on_error(self):
+        """Language sync failure should not raise and should warn the user."""
+        from notebooklm.cli.session import _sync_server_language_to_config
+
+        with (
+            patch("notebooklm.cli.session.NotebookLMClient") as mock_client_cls,
+            patch("notebooklm.cli.session.console") as mock_console,
+        ):
+            mock_client_cls.from_storage = AsyncMock(side_effect=Exception("Network error"))
+
+            # Should not raise
+            _sync_server_language_to_config()
+
+        # Should print a warning so the user knows to sync manually
+        mock_console.print.assert_called_once()
+        warning_text = mock_console.print.call_args[0][0]
+        assert "language" in warning_text.lower()
+
+
+# =============================================================================
+# EDGE CASES
+# =============================================================================
 
 
 class TestSessionEdgeCases:

@@ -567,6 +567,78 @@ def generate_slide_deck(
     return _run()
 
 
+@generate.command("revise-slide")
+@click.argument("description")
+@click.option(
+    "-n",
+    "--notebook",
+    "notebook_id",
+    default=None,
+    help="Notebook ID (uses current if not set)",
+)
+@click.option(
+    "-a",
+    "--artifact",
+    "artifact_id",
+    required=True,
+    help="Slide deck artifact ID to revise",
+)
+@click.option(
+    "--slide",
+    "slide_index",
+    type=int,
+    required=True,
+    help="Zero-based index of the slide to revise (0 = first slide)",
+)
+@click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
+@retry_option
+@json_option
+@with_client
+def generate_revise_slide(
+    ctx,
+    description,
+    notebook_id,
+    artifact_id,
+    slide_index,
+    wait,
+    max_retries,
+    json_output,
+    client_auth,
+):
+    """Revise an individual slide in an existing slide deck.
+
+    DESCRIPTION is the natural language prompt for the revision.
+    The slide deck must already be generated before using this command.
+
+    \b
+    Example:
+      notebooklm generate revise-slide "Move the title up" --artifact <id> --slide 0
+      notebooklm generate revise-slide "Remove taxonomy" --artifact <id> --slide 3 --wait
+    """
+    nb_id = require_notebook(notebook_id)
+
+    async def _run():
+        async with NotebookLMClient(client_auth) as client:
+            nb_id_resolved = await resolve_notebook_id(client, nb_id)
+
+            async def _generate():
+                return await client.artifacts.revise_slide(
+                    nb_id_resolved,
+                    artifact_id=artifact_id,
+                    slide_index=slide_index,
+                    prompt=description,
+                )
+
+            result = await generate_with_retry(
+                _generate, max_retries, "slide revision", json_output
+            )
+            await handle_generation_result(
+                client, nb_id_resolved, result, "slide revision", wait, json_output
+            )
+
+    return _run()
+
+
 @generate.command("quiz")
 @click.argument("description", default="", required=False)
 @click.option(
@@ -935,6 +1007,12 @@ def _output_mind_map_result(result: Any, json_output: bool) -> None:
 )
 @click.option("--source", "-s", "source_ids", multiple=True, help="Limit to specific source IDs")
 @click.option("--language", default=None, help="Output language (default: from config or 'en')")
+@click.option(
+    "--append",
+    "append_instructions",
+    default=None,
+    help="Append extra instructions to the built-in prompt for non-custom formats. Has no effect with --format custom.",
+)
 @click.option("--wait/--no-wait", default=False, help="Wait for completion (default: no-wait)")
 @retry_option
 @json_option
@@ -946,6 +1024,7 @@ def generate_report_cmd(
     notebook_id,
     source_ids,
     language,
+    append_instructions,
     wait,
     max_retries,
     json_output,
@@ -962,6 +1041,8 @@ def generate_report_cmd(
       notebooklm generate report --format study-guide         # study guide
       notebooklm generate report -s src_001 -s src_002        # from specific sources
       notebooklm generate report "Create a white paper..."    # custom report
+      notebooklm generate report --format briefing-doc --append "Focus on AI trends"
+      notebooklm generate report --format study-guide --append "Target audience: beginners"
     """
     nb_id = require_notebook(notebook_id)
 
@@ -974,6 +1055,13 @@ def generate_report_cmd(
             custom_prompt = description
         else:
             custom_prompt = description
+
+    if append_instructions and actual_format == "custom":
+        click.echo(
+            "Warning: --append has no effect with --format custom. Use the description argument instead.",
+            err=True,
+        )
+        append_instructions = None
 
     format_map = {
         "briefing-doc": ReportFormat.BRIEFING_DOC,
@@ -1002,6 +1090,7 @@ def generate_report_cmd(
                     language=resolve_language(language),
                     report_format=report_format_enum,
                     custom_prompt=custom_prompt,
+                    extra_instructions=append_instructions,
                 )
 
             result = await generate_with_retry(_generate, max_retries, format_display, json_output)

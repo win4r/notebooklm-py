@@ -1,5 +1,8 @@
 """Integration tests for SettingsAPI."""
 
+import json
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -103,3 +106,45 @@ class TestSettingsAPI:
             result = await client.settings.get_output_language()
 
         assert result is None
+
+
+class TestLoginLanguageSync:
+    """Integration test for syncing server language to local config after login."""
+
+    def test_login_syncs_server_language_to_config(
+        self, httpx_mock: HTTPXMock, auth_tokens, build_rpc_response, tmp_path
+    ):
+        """Full flow: login -> fetch server language via RPC -> persist to local config."""
+        import importlib
+
+        from notebooklm.cli.session import _sync_server_language_to_config
+
+        config_path = tmp_path / "config.json"
+        # Use importlib to bypass Click group shadowing on Python 3.10
+        language_mod = importlib.import_module("notebooklm.cli.language")
+
+        # Mock the RPC response for GET_USER_SETTINGS returning "zh_Hans"
+        response_data = [
+            [
+                None,
+                [100, 50, 10],
+                [True, None, None, True, ["zh_Hans"]],
+            ]
+        ]
+        response = build_rpc_response(RPCMethod.GET_USER_SETTINGS, response_data)
+        httpx_mock.add_response(content=response.encode())
+
+        with (
+            patch(
+                "notebooklm.cli.session.NotebookLMClient.from_storage",
+                new_callable=AsyncMock,
+                return_value=NotebookLMClient(auth_tokens),
+            ),
+            patch.object(language_mod, "get_config_path", return_value=config_path),
+            patch.object(language_mod, "get_home_dir"),
+        ):
+            _sync_server_language_to_config()
+
+        # Verify language was persisted through the full RPC -> config flow
+        config = json.loads(config_path.read_text())
+        assert config["language"] == "zh_Hans"

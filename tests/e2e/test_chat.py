@@ -7,8 +7,33 @@ Run with: pytest tests/e2e/test_chat.py -m e2e
 import pytest
 
 from notebooklm import AskResult, ChatReference
+from notebooklm.exceptions import ChatError
 
 from .conftest import is_valid_uuid, requires_auth
+
+_RATE_LIMIT_PHRASES = ("rate limit", "rate limited", "rejected by the api")
+
+
+@pytest.fixture(autouse=True)
+async def _skip_on_chat_rate_limit(client):
+    """Auto-skip any test that hits a chat API rate limit.
+
+    Only skips on actual rate limit errors (ChatError with rate-limit message).
+    Other ChatErrors (HTTP failures, auth errors, etc.) are re-raised so they
+    show as failures rather than silently skipping.
+    """
+    original_ask = client.chat.ask
+
+    async def _ask_with_skip(*args, **kwargs):
+        try:
+            return await original_ask(*args, **kwargs)
+        except ChatError as e:
+            msg = str(e).lower()
+            if any(phrase in msg for phrase in _RATE_LIMIT_PHRASES):
+                pytest.skip(str(e))
+            raise
+
+    client.chat.ask = _ask_with_skip
 
 
 @pytest.mark.e2e
@@ -146,6 +171,106 @@ class TestChatE2E:
             citation_numbers = [ref.citation_number for ref in result.references]
             assert all(n is not None for n in citation_numbers)
             assert citation_numbers == list(range(1, len(citation_numbers) + 1))
+
+
+@pytest.mark.e2e
+@requires_auth
+class TestChatHistoryE2E:
+    """E2E tests for chat history and conversation turns API (khqZz RPC).
+
+    These tests use an existing read-only notebook with pre-existing conversation
+    history. They do not ask new questions, since conversation persistence takes
+    time and makes tests flaky.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.readonly
+    async def test_get_conversation_turns_returns_qa(self, client, read_only_notebook_id):
+        """get_conversation_turns returns Q&A turns for an existing conversation."""
+        conv_id = await client.chat.get_conversation_id(read_only_notebook_id)
+        if not conv_id:
+            pytest.skip("No conversation history available in read-only notebook")
+
+        turns_data = await client.chat.get_conversation_turns(
+            read_only_notebook_id,
+            conv_id,
+            limit=2,
+        )
+
+        assert turns_data is not None
+        assert isinstance(turns_data[0], list)
+        turns = turns_data[0]
+        assert len(turns) >= 1
+
+        turn_types = [turn[2] for turn in turns if isinstance(turn, list) and len(turn) > 2]
+        assert any(t in (1, 2) for t in turn_types), "Expected question or answer turns"
+
+    @pytest.mark.asyncio
+    @pytest.mark.readonly
+    async def test_get_conversation_turns_question_text(self, client, read_only_notebook_id):
+        """get_conversation_turns includes question text in an existing conversation."""
+        conv_id = await client.chat.get_conversation_id(read_only_notebook_id)
+        if not conv_id:
+            pytest.skip("No conversation history available in read-only notebook")
+
+        turns_data = await client.chat.get_conversation_turns(
+            read_only_notebook_id,
+            conv_id,
+            limit=2,
+        )
+
+        assert turns_data is not None
+        turns = turns_data[0]
+        question_turns = [t for t in turns if isinstance(t, list) and len(t) > 3 and t[2] == 1]
+        assert question_turns, "No question turn found in response"
+        assert isinstance(question_turns[0][3], str)
+        assert len(question_turns[0][3]) > 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.readonly
+    async def test_get_conversation_turns_answer_text(self, client, read_only_notebook_id):
+        """get_conversation_turns includes AI answer text in an existing conversation."""
+        conv_id = await client.chat.get_conversation_id(read_only_notebook_id)
+        if not conv_id:
+            pytest.skip("No conversation history available in read-only notebook")
+
+        turns_data = await client.chat.get_conversation_turns(
+            read_only_notebook_id,
+            conv_id,
+            limit=2,
+        )
+
+        assert turns_data is not None
+        turns = turns_data[0]
+        answer_turns = [t for t in turns if isinstance(t, list) and len(t) > 4 and t[2] == 2]
+        assert answer_turns, "No answer turn found in response"
+        answer_text = answer_turns[0][4][0][0]
+        assert isinstance(answer_text, str)
+        assert len(answer_text) > 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.readonly
+    async def test_get_conversation_id(self, client, read_only_notebook_id):
+        """get_conversation_id returns an existing conversation ID."""
+        conv_id = await client.chat.get_conversation_id(read_only_notebook_id)
+        if not conv_id:
+            pytest.skip("No conversation history available in read-only notebook")
+
+        assert isinstance(conv_id, str)
+        assert len(conv_id) > 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.readonly
+    async def test_get_history_returns_qa_pairs(self, client, read_only_notebook_id):
+        """get_history returns Q&A pairs from existing conversation history."""
+        qa_pairs = await client.chat.get_history(read_only_notebook_id)
+        if not qa_pairs:
+            pytest.skip("No conversation history available in read-only notebook")
+
+        # Each entry is a (question, answer) tuple
+        q, a = qa_pairs[-1]  # most recent Q&A
+        assert isinstance(q, str) and q, "Question should be non-empty string"
+        assert isinstance(a, str) and a, "Answer should be non-empty string"
 
 
 @pytest.mark.e2e

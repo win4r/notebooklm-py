@@ -310,6 +310,50 @@ class TestArtifactsSourceSelection:
         assert source_ids_double == [["src_x"], ["src_y"], ["src_z"]]
 
     @pytest.mark.asyncio
+    async def test_generate_report_extra_instructions_appended(self, mock_core, mock_notes_api):
+        """extra_instructions is appended to the built-in prompt with \\n\\n separator."""
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+        mock_core.rpc_call.return_value = [["artifact_789", "Report", 2, None, 1]]
+
+        await api.generate_report(
+            notebook_id="nb_123",
+            source_ids=["src_x"],
+            extra_instructions="Focus on financial metrics",
+        )
+
+        params = mock_core.rpc_call.call_args.args[1]
+        report_config = params[2][7][1]
+        prompt = report_config[5]
+
+        assert "Focus on financial metrics" in prompt
+        assert "\n\nFocus on financial metrics" in prompt
+
+    @pytest.mark.asyncio
+    async def test_generate_report_extra_instructions_ignored_for_custom(
+        self, mock_core, mock_notes_api
+    ):
+        """extra_instructions has no effect when report_format is CUSTOM."""
+        from notebooklm.rpc.types import ReportFormat
+
+        api = ArtifactsAPI(mock_core, mock_notes_api)
+        mock_core.rpc_call.return_value = [["artifact_789", "Report", 2, None, 1]]
+
+        await api.generate_report(
+            notebook_id="nb_123",
+            source_ids=["src_x"],
+            report_format=ReportFormat.CUSTOM,
+            custom_prompt="My custom prompt",
+            extra_instructions="Should be ignored",
+        )
+
+        params = mock_core.rpc_call.call_args.args[1]
+        report_config = params[2][7][1]
+        prompt = report_config[5]
+
+        assert "Should be ignored" not in prompt
+        assert prompt == "My custom prompt"
+
+    @pytest.mark.asyncio
     async def test_generate_quiz_source_encoding(self, mock_core, mock_notes_api):
         """Test generate_quiz has correct source encoding format."""
         api = ArtifactsAPI(mock_core, mock_notes_api)

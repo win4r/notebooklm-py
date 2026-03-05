@@ -24,14 +24,12 @@ from .helpers import (
     set_current_conversation,
     with_client,
 )
-from .options import json_option
 
 logger = logging.getLogger(__name__)
 
 
 def _determine_conversation_id(
     *,
-    new_conversation: bool,
     explicit_conversation_id: str | None,
     explicit_notebook_id: str | None,
     resolved_notebook_id: str,
@@ -39,14 +37,9 @@ def _determine_conversation_id(
 ) -> str | None:
     """Determine which conversation ID to use for the ask command.
 
-    Returns None if a new conversation should be started, otherwise returns
+    Returns None if no cached conversation exists, otherwise returns
     the conversation ID to continue.
     """
-    if new_conversation:
-        if not json_output:
-            console.print("[dim]Starting new conversation...[/dim]")
-        return None
-
     if explicit_conversation_id:
         return explicit_conversation_id
 
@@ -60,24 +53,22 @@ def _determine_conversation_id(
     return get_current_conversation()
 
 
-async def _get_latest_conversation_from_history(
+async def _get_latest_conversation_from_server(
     client, notebook_id: str, json_output: bool
 ) -> str | None:
-    """Fetch the most recent conversation ID from notebook history.
+    """Fetch the most recent conversation ID from the server.
 
-    Returns None if history is unavailable or empty.
+    Returns None if unavailable or empty.
     """
     try:
-        history = await client.chat.get_history(notebook_id, limit=1)
-        if history and history[0]:
-            last_conv = history[0][-1]
-            conv_id = last_conv[0] if isinstance(last_conv, list) else str(last_conv)
+        conv_id = await client.chat.get_conversation_id(notebook_id)
+        if conv_id:
             if not json_output:
                 console.print(f"[dim]Continuing conversation {conv_id[:8]}...[/dim]")
             return conv_id
     except Exception as e:
         logger.debug(
-            "Failed to fetch conversation history (%s): %s",
+            "Failed to fetch last conversation (%s): %s",
             type(e).__name__,
             e,
         )
@@ -99,7 +90,6 @@ def register_chat_commands(cli):
         help="Notebook ID (uses current if not set)",
     )
     @click.option("--conversation-id", "-c", default=None, help="Continue a specific conversation")
-    @click.option("--new", "new_conversation", is_flag=True, help="Start a new conversation")
     @click.option(
         "--source",
         "-s",
@@ -107,16 +97,21 @@ def register_chat_commands(cli):
         multiple=True,
         help="Limit to specific source IDs (can be repeated)",
     )
-    @json_option
+    @click.option(
+        "--json", "json_output", is_flag=True, help="Output as JSON (includes references)"
+    )
+    @click.option("--save-as-note", is_flag=True, help="Save response as a note")
+    @click.option("--note-title", default=None, help="Note title (use with --save-as-note)")
     @with_client
     def ask_cmd(
         ctx,
         question,
         notebook_id,
         conversation_id,
-        new_conversation,
         source_ids,
         json_output,
+        save_as_note,
+        note_title,
         client_auth,
     ):
         """Ask a notebook a question.
@@ -128,10 +123,10 @@ def register_chat_commands(cli):
         \b
         Example:
           notebooklm ask "what are the main themes?"
-          notebooklm ask --new "start fresh question"
           notebooklm ask -c <id> "continue this one"
           notebooklm ask -s src_001 -s src_002 "question about specific sources"
-          notebooklm ask "explain X" --json     # Get answer with source references
+          notebooklm ask "explain X" --json             # Get answer with source references
+          notebooklm ask "explain X" --save-as-note     # Save response as a note
         """
         nb_id = require_notebook(notebook_id)
 
@@ -139,22 +134,27 @@ def register_chat_commands(cli):
             async with NotebookLMClient(client_auth) as client:
                 nb_id_resolved = await resolve_notebook_id(client, nb_id)
                 effective_conv_id = _determine_conversation_id(
-                    new_conversation=new_conversation,
                     explicit_conversation_id=conversation_id,
                     explicit_notebook_id=notebook_id,
                     resolved_notebook_id=nb_id_resolved,
                     json_output=json_output,
                 )
 
-                # If no conversation ID yet, try to get the most recent one from history
-                if effective_conv_id is None and not new_conversation:
-                    effective_conv_id = await _get_latest_conversation_from_history(
+                resumed_from_server = False
+                if not effective_conv_id:
+                    # If no conversation ID yet, try to get the most recent one from server
+                    effective_conv_id = await _get_latest_conversation_from_server(
                         client, nb_id_resolved, json_output
                     )
+                    if effective_conv_id:
+                        resumed_from_server = True
 
                 sources = await resolve_source_ids(client, nb_id_resolved, source_ids)
                 result = await client.chat.ask(
-                    nb_id_resolved, question, source_ids=sources, conversation_id=effective_conv_id
+                    nb_id_resolved,
+                    question,
+                    source_ids=sources,
+                    conversation_id=effective_conv_id,
                 )
 
                 if result.conversation_id:
@@ -167,16 +167,34 @@ def register_chat_commands(cli):
                     # Exclude raw_response from CLI output for brevity
                     del data["raw_response"]
                     json_output_response(data)
-                    return
-
-                console.print("[bold cyan]Answer:[/bold cyan]")
-                console.print(result.answer)
-                if result.is_follow_up:
-                    console.print(
-                        f"\n[dim]Conversation: {result.conversation_id} (turn {result.turn_number or '?'})[/dim]"
-                    )
+                    if not save_as_note:
+                        return
                 else:
-                    console.print(f"\n[dim]New conversation: {result.conversation_id}[/dim]")
+                    console.print("[bold cyan]Answer:[/bold cyan]")
+                    console.print(result.answer)
+                    if result.is_follow_up and resumed_from_server:
+                        console.print(
+                            f"\n[dim]Resumed conversation: {result.conversation_id}[/dim]"
+                        )
+                    elif result.is_follow_up:
+                        console.print(
+                            f"\n[dim]Conversation: {result.conversation_id} (turn {result.turn_number or '?'})[/dim]"
+                        )
+                    else:
+                        console.print(f"\n[dim]New conversation: {result.conversation_id}[/dim]")
+
+                if save_as_note:
+                    if not result.answer:
+                        console.print("[yellow]Warning: No answer to save as note[/yellow]")
+                        return
+                    try:
+                        title = note_title or f"Chat: {question[:50]}"
+                        note = await client.notes.create(nb_id_resolved, title, result.answer)
+                        console.print(
+                            f"\n[dim]Saved as note: {note.title} ({note.id[:8]}...)[/dim]"
+                        )
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: Failed to save note: {e}[/yellow]")
 
         return _run()
 
@@ -277,17 +295,37 @@ def register_chat_commands(cli):
         default=None,
         help="Notebook ID (uses current if not set)",
     )
-    @click.option("--limit", "-l", default=20, help="Number of messages")
+    @click.option("--limit", "-l", default=100, help="Maximum number of Q&A turns to show")
     @click.option("--clear", "clear_cache", is_flag=True, help="Clear local conversation cache")
+    @click.option("--save", "save_as_note", is_flag=True, help="Save history as a note")
+    @click.option("-t", "--note-title", "note_title", default=None, help="Note title (with --save)")
+    @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
+    @click.option("--show-all", is_flag=True, help="Show full Q&A content instead of preview")
     @with_client
-    def history_cmd(ctx, notebook_id, limit, clear_cache, client_auth):
-        """Get conversation history or clear local cache.
+    def history_cmd(
+        ctx,
+        notebook_id,
+        limit,
+        clear_cache,
+        save_as_note,
+        note_title,
+        json_output,
+        show_all,
+        client_auth,
+    ):
+        """Get conversation history or save it as a note.
+
+        Shows all Q&A turns from the most recent conversation.
 
         \b
         Example:
-          notebooklm history              # Show history for current notebook
-          notebooklm history -n nb123     # Show history for specific notebook
-          notebooklm history --clear      # Clear local cache
+          notebooklm history                      # Show Q&A history
+          notebooklm history -n nb123             # Show history for specific notebook
+          notebooklm history --clear              # Clear local cache
+          notebooklm history --save               # Save history as a note
+          notebooklm history --save --note-title "Summary"  # Save with custom title
+          notebooklm history --json               # Machine-readable JSON output
+          notebooklm history --show-all           # Full Q&A content
         """
 
         async def _run():
@@ -302,28 +340,76 @@ def register_chat_commands(cli):
 
                 nb_id = require_notebook(notebook_id)
                 nb_id_resolved = await resolve_notebook_id(client, nb_id)
-                history = await client.chat.get_history(nb_id_resolved, limit=limit)
+                conv_id = await client.chat.get_conversation_id(nb_id_resolved)
+                qa_pairs = await client.chat.get_history(
+                    nb_id_resolved, limit=limit, conversation_id=conv_id
+                )
 
-                if history:
-                    console.print("[bold cyan]Conversation History:[/bold cyan]")
-                    try:
-                        conversations = history[0] if history else []
-                        if conversations:
-                            table = Table()
-                            table.add_column("#", style="dim")
-                            table.add_column("Conversation ID", style="cyan")
-                            for i, conv in enumerate(conversations, 1):
-                                conv_id = conv[0] if isinstance(conv, list) and conv else str(conv)
-                                table.add_row(str(i), conv_id)
-                            console.print(table)
-                            console.print(
-                                "\n[dim]Note: Only conversation IDs available. Use 'notebooklm ask -c <id>' to continue.[/dim]"
-                            )
-                        else:
-                            console.print("[yellow]No conversations found[/yellow]")
-                    except (IndexError, TypeError):
-                        console.print(history)
-                else:
+                if save_as_note:
+                    if not qa_pairs:
+                        raise click.ClickException(
+                            "No conversation history found for this notebook."
+                        )
+                    content = _format_history(qa_pairs)
+                    title = note_title or "Chat History"
+                    note = await client.notes.create(nb_id_resolved, title, content)
+                    console.print(f"[green]Saved as note: {note.title} ({note.id[:8]}...)[/green]")
+                    return
+
+                if json_output:
+                    data = {
+                        "notebook_id": nb_id_resolved,
+                        "conversation_id": conv_id,
+                        "count": len(qa_pairs),
+                        "qa_pairs": [
+                            {"turn": i, "question": q, "answer": a}
+                            for i, (q, a) in enumerate(qa_pairs, 1)
+                        ],
+                    }
+                    json_output_response(data)
+                    return
+
+                if not qa_pairs:
                     console.print("[yellow]No conversation history[/yellow]")
+                    return
+
+                console.print("[bold cyan]Conversation History:[/bold cyan]")
+
+                if show_all:
+                    if conv_id:
+                        console.print(f"\n[bold]── {conv_id} ──[/bold]")
+                    for i, (question, answer) in enumerate(qa_pairs, 1):
+                        console.print(f"[bold]#{i} Q:[/bold] {question}")
+                        console.print(f"   A: {answer}\n")
+                    return
+
+                if conv_id:
+                    console.print(f"\n[dim]── {conv_id} ──[/dim]")
+                table = Table()
+                table.add_column("#", style="dim", width=4)
+                table.add_column("Question", style="white", max_width=50)
+                table.add_column("Answer preview", style="dim", max_width=50)
+                for i, (question, answer) in enumerate(qa_pairs, 1):
+                    table.add_row(str(i), question[:50], answer[:50])
+                console.print(table)
+                console.print("\n[dim]Use 'notebooklm history --save' to save as a note.[/dim]")
 
         return _run()
+
+
+def _format_single_qa(question: str, answer: str) -> str:
+    """Format one Q&A pair as note content."""
+    parts = []
+    if question:
+        parts.append(f"**Q:** {question}")
+    if answer:
+        parts.append(f"**A:** {answer}")
+    return "\n\n".join(parts)
+
+
+def _format_history(qa_pairs: list[tuple[str, str]]) -> str:
+    """Format Q&A history as note content."""
+    turns = []
+    for i, (question, answer) in enumerate(qa_pairs, 1):
+        turns.append(f"### Turn {i}\n\n{_format_single_qa(question, answer)}")
+    return "\n\n---\n\n".join(turns)

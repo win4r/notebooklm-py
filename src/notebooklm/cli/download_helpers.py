@@ -15,6 +15,35 @@ class ArtifactDict(TypedDict):
     created_at: int  # Unix timestamp
 
 
+def resolve_partial_artifact_id(artifacts: list[ArtifactDict], artifact_id: str) -> str:
+    """Resolve a partial artifact ID to a full ID.
+
+    Full IDs (20+ chars) are returned as-is. Shorter IDs are matched as
+    case-insensitive prefixes against the artifact list.
+
+    Args:
+        artifacts: Pre-fetched list of artifacts to search.
+        artifact_id: Full or partial artifact ID.
+
+    Returns:
+        Full artifact ID.
+
+    Raises:
+        ValueError: If no match found or prefix is ambiguous.
+    """
+    if len(artifact_id) >= 20:
+        return artifact_id
+
+    matches = [a for a in artifacts if a["id"].lower().startswith(artifact_id.lower())]
+
+    if len(matches) == 1:
+        return matches[0]["id"]
+    if len(matches) > 1:
+        options = ", ".join(f"{a['id']} ({a['title']})" for a in matches)
+        raise ValueError(f"Ambiguous partial ID '{artifact_id}' matches: {options}")
+    raise ValueError(f"Artifact '{artifact_id}' not found")
+
+
 def select_artifact(
     artifacts: list[ArtifactDict],
     latest: bool = True,

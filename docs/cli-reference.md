@@ -1,7 +1,7 @@
 # CLI Reference
 
 **Status:** Active
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-03-02
 
 Complete command reference for the `notebooklm` CLI—providing full programmatic access to all NotebookLM features, including capabilities not exposed in the web UI.
 
@@ -77,8 +77,14 @@ See [Configuration](configuration.md) for details on environment variables and C
 | `ask <question>` | Ask a question | `notebooklm ask "What is this about?"` |
 | `ask -s <id>` | Ask using specific sources | `notebooklm ask "Summarize" -s src1 -s src2` |
 | `ask --json` | Get answer with source references | `notebooklm ask "Explain X" --json` |
+| `ask --save-as-note` | Save response as a note | `notebooklm ask "Explain X" --save-as-note` |
+| `ask --save-as-note --note-title` | Save response with custom note title | `notebooklm ask "Explain X" --save-as-note --note-title "Title"` |
 | `configure` | Set persona/mode | `notebooklm configure --mode learning-guide` |
-| `history` | View/clear history | `notebooklm history --clear` |
+| `history` | View conversation history | `notebooklm history` |
+| `history --clear` | Clear local conversation cache | `notebooklm history --clear` |
+| `history --save` | Save history as a note | `notebooklm history --save` |
+| `history --save --note-title` | Save history with custom title | `notebooklm history --save --note-title "Summary"` |
+| `history --show-all` | Show full Q&A content (not preview) | `notebooklm history --show-all` |
 
 ### Source Commands (`notebooklm source <cmd>`)
 
@@ -118,12 +124,13 @@ All generate commands support:
 | `audio [description]` | `--format [deep-dive\|brief\|critique\|debate]`, `--length [short\|default\|long]`, `--wait` | `generate audio "Focus on history"` |
 | `video [description]` | `--format [explainer\|brief]`, `--style [auto\|classic\|whiteboard\|kawaii\|anime\|watercolor\|retro-print\|heritage\|paper-craft]`, `--wait` | `generate video "Explainer for kids"` |
 | `slide-deck [description]` | `--format [detailed\|presenter]`, `--length [default\|short]`, `--wait` | `generate slide-deck` |
+| `revise-slide <description>` | `-a/--artifact <id>` (required), `--slide N` (required), `--wait` | `generate revise-slide "Move title up" --artifact <id> --slide 0` |
 | `quiz [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--wait` | `generate quiz --difficulty hard` |
 | `flashcards [description]` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]`, `--wait` | `generate flashcards` |
 | `infographic [description]` | `--orientation [landscape\|portrait\|square]`, `--detail [concise\|standard\|detailed]`, `--wait` | `generate infographic` |
 | `data-table <description>` | `--wait` | `generate data-table "compare concepts"` |
 | `mind-map` | *(sync, no wait needed)* | `generate mind-map` |
-| `report [description]` | `--format [briefing-doc\|study-guide\|blog-post\|custom]`, `--wait` | `generate report --format study-guide` |
+| `report [description]` | `--format [briefing-doc\|study-guide\|blog-post\|custom]`, `--append "extra instructions"`, `--wait` | `generate report --format study-guide` |
 
 ### Artifact Commands (`notebooklm artifact <cmd>`)
 
@@ -172,7 +179,7 @@ notebooklm download abc12 --force                  # Partial ID + overwrite exis
 |---------|-----------|---------|---------|
 | `audio [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download audio --all` |
 | `video [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download video --latest` |
-| `slide-deck [path]` | Output directory | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download slide-deck ./slides/` |
+| `slide-deck [path]` | Output path      | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run`, `--format [pdf\|pptx]` | `download slide-deck ./slides.pdf` |
 | `infographic [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download infographic ./info.png` |
 | `report [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download report ./report.md` |
 | `mind-map [path]` | Output path | `-a/--artifact`, `--all`, `--latest`, `--name`, `--force`, `--dry-run` | `download mind-map ./map.json` |
@@ -214,7 +221,11 @@ These CLI capabilities are not available in NotebookLM's web interface:
 | **Quiz/Flashcard export** | `download quiz --format json` | Export as JSON, Markdown, or HTML |
 | **Mind map extraction** | `download mind-map` | Export hierarchical JSON for visualization tools |
 | **Data table export** | `download data-table` | Download structured tables as CSV |
+| **Slide deck as PPTX** | `download slide-deck --format pptx` | Download as editable .pptx (web UI only offers PDF) |
+| **Slide revision** | `generate revise-slide "prompt" --artifact <id> --slide N` | Modify individual slides with a natural-language prompt |
+| **Report template append** | `generate report --format study-guide --append "..."` | Append instructions to built-in templates |
 | **Source fulltext** | `source fulltext <id>` | Retrieve the indexed text content of any source |
+| **Save chat to note** | `ask "..." --save-as-note` / `history --save` | Save Q&A answers or full conversation as notebook notes |
 | **Programmatic sharing** | `share` commands | Manage permissions without the UI |
 
 ---
@@ -566,6 +577,35 @@ notebooklm generate video -s src_123 -s src_456
 notebooklm generate video --json
 ```
 
+### Generate: `revise-slide`
+
+Revise an individual slide in an existing slide deck using a natural-language prompt.
+
+```bash
+notebooklm generate revise-slide <description> --artifact <id> --slide N [OPTIONS]
+```
+
+**Required Options:**
+- `-a, --artifact ID` - The slide deck artifact ID to revise
+- `--slide N` - Zero-based index of the slide to revise (0 = first slide)
+
+**Optional:**
+- `--wait` - Wait for revision to complete
+- `--json` - Machine-readable output
+
+**Examples:**
+```bash
+# Revise the first slide
+notebooklm generate revise-slide "Move the title up" --artifact art123 --slide 0
+
+# Revise the fourth slide and wait for completion
+notebooklm generate revise-slide "Remove taxonomy table" --artifact art123 --slide 3 --wait
+```
+
+**Note:** The slide deck must already be fully generated before using `revise-slide`. Use `artifact list` to find the artifact ID.
+
+---
+
 ### Generate: `report`
 
 Generate a text report (briefing doc, study guide, blog post, or custom).
@@ -576,6 +616,7 @@ notebooklm generate report [description] [OPTIONS]
 
 **Options:**
 - `--format [briefing-doc|study-guide|blog-post|custom]` - Report format (default: briefing-doc)
+- `--append TEXT` - Append extra instructions to the built-in prompt (no effect with `--format custom`)
 - `-s, --source ID` - Use specific source(s) (repeatable, uses all if not specified)
 - `--wait` - Wait for generation to complete
 - `--json` - Output as JSON
@@ -590,6 +631,10 @@ notebooklm generate report --format study-guide -s src_001 -s src_002
 
 # Custom report with description (auto-selects custom format)
 notebooklm generate report "Create a white paper analyzing the key trends"
+
+# Append instructions to a built-in format
+notebooklm generate report --format study-guide --append "Target audience: beginners"
+notebooklm generate report --format briefing-doc --append "Focus on AI trends, keep it under 2 pages"
 ```
 
 ### Download: `audio`, `video`, `slide-deck`, `infographic`, `report`, `mind-map`, `data-table`
@@ -606,7 +651,7 @@ notebooklm download <type> [OUTPUT_PATH] [OPTIONS]
 |------|-------------------|-------------|
 | `audio` | `.mp4` | Audio overview (podcast) in MP4 container |
 | `video` | `.mp4` | Video overview |
-| `slide-deck` | `.pdf` | Slide deck as PDF |
+| `slide-deck` | `.pdf` or `.pptx` | Slide deck as PDF (default) or PowerPoint |
 | `infographic` | `.png` | Infographic image |
 | `report` | `.md` | Report as Markdown (Briefing Doc, Study Guide, etc.) |
 | `mind-map` | `.json` | Mind map as JSON tree structure |
@@ -617,10 +662,11 @@ notebooklm download <type> [OUTPUT_PATH] [OPTIONS]
 - `--latest` - Download only the most recent artifact (default if no ID/name provided)
 - `--earliest` - Download only the oldest artifact
 - `--name NAME` - Download artifact with matching title (supports partial matches)
-- `-a, --artifact ID` - Select specific artifact by ID
+- `-a, --artifact ID` - Select specific artifact by ID (supports partial IDs)
 - `--dry-run` - Show what would be downloaded without actually downloading
 - `--force` - Overwrite existing files
 - `--no-clobber` - Skip if file already exists (default)
+- `--format [pdf|pptx]` - Slide deck format (slide-deck command only, default: pdf)
 - `--json` - Output result in JSON format
 
 **Examples:**
@@ -633,6 +679,9 @@ notebooklm download infographic --all
 
 # Download a specific slide deck by name
 notebooklm download slide-deck --name "Final Presentation"
+
+# Download slide deck as PPTX (editable PowerPoint)
+notebooklm download slide-deck --format pptx
 
 # Preview a batch download
 notebooklm download audio --all --dry-run

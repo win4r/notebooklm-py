@@ -1,7 +1,7 @@
 # RPC & UI Reference
 
 **Status:** Active
-**Last Updated:** 2026-01-18
+**Last Updated:** 2026-03-02
 **Source of Truth:** `src/notebooklm/rpc/types.py`
 **Purpose:** Complete reference for RPC methods, UI selectors, and payload structures
 
@@ -29,7 +29,8 @@
 | `R7cb6c` | CREATE_ARTIFACT | Unified artifact generation | `_artifacts.py` |
 | `gArtLc` | LIST_ARTIFACTS | List artifacts in a notebook | `_artifacts.py` |
 | `V5N4be` | DELETE_ARTIFACT | Delete artifact | `_artifacts.py` |
-| `hPTbtc` | GET_CONVERSATION_HISTORY | Get chat history | `_chat.py` |
+| `hPTbtc` | GET_CONVERSATION_ID | Get most recent conversation ID | `_chat.py` |
+| `khqZz` | GET_CONVERSATION_TURNS | Get Q&A turns for a conversation | `_chat.py` |
 | `CYK0Xb` | CREATE_NOTE | Create a note (placeholder) | `_notes.py` |
 | `cYAfTb` | UPDATE_NOTE | Update note content/title | `_notes.py` |
 | `AH0mwd` | DELETE_NOTE | Delete a note | `_notes.py` |
@@ -395,18 +396,46 @@ params = [
 ]
 ```
 
-### RPC: GET_CONVERSATION_HISTORY (hPTbtc)
+### RPC: GET_CONVERSATION_ID (hPTbtc)
 
-**Source:** `_chat.py::get_history()`
+**Source:** `_chat.py::get_conversation_id()`
+
+Returns the most recent conversation ID for a notebook. The server always returns
+exactly one ID regardless of the `limit` param. Use `GET_CONVERSATION_TURNS` to
+fetch the actual messages for the returned conversation.
 
 ```python
 params = [
     [],           # 0: Empty sources array
     None,         # 1
     notebook_id,  # 2
-    limit,        # 3: Max conversations (e.g., 20)
+    1,            # 3: Limit (server ignores this; always returns one ID)
 ]
 ```
+
+**Response:** `[[[conv_id]]]` — single entry list containing the conversation ID.
+
+---
+
+### RPC: GET_CONVERSATION_TURNS (khqZz)
+
+**Source:** `_chat.py::get_conversation_turns()`
+
+Returns the Q&A turns for a specific conversation. Turns are ordered newest-first.
+
+```python
+params = [
+    [],              # 0: Empty
+    None,            # 1
+    None,            # 2
+    conversation_id, # 3
+    limit,           # 4: Max turns to return (e.g., 2 for latest Q&A pair)
+]
+```
+
+**Response turn structure:**
+- `turn[2] == 1`: User question — text is at `turn[3]`
+- `turn[2] == 2`: AI answer — text is at `turn[4][0][0]`
 
 ---
 

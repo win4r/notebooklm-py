@@ -382,15 +382,22 @@ def decode_response(raw_response: str, rpc_id: str, allow_null: bool = False) ->
                 found_ids=found_ids,
                 raw_response=response_preview,
             )
-        # Log raw response details at debug level for troubleshooting
-        logger.debug(
-            "Empty result for RPC ID '%s'. Chunks parsed: %d. Response preview: %s",
-            rpc_id,
-            len(chunks),
-            response_preview,
-        )
+
+        if rpc_id in found_ids:
+            # RPC ID was found but extract_rpc_result returned None
+            # This means wrb.fr had null result_data without UserDisplayableError
+            raise RPCError(
+                f"RPC {rpc_id} returned null result data "
+                f"(possible server error or parameter mismatch)",
+                method_id=rpc_id,
+                found_ids=found_ids,
+                raw_response=response_preview,
+            )
+
+        # No RPC data found at all (found_ids is empty; non-empty cases handled above)
         raise RPCError(
-            f"No result found for RPC ID: {rpc_id}",
+            f"No result found for RPC ID: {rpc_id} "
+            f"(response contained no RPC data — {len(chunks)} chunks parsed)",
             method_id=rpc_id,
             raw_response=response_preview,
         )

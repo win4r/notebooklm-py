@@ -33,6 +33,7 @@ class TestResearchStart:
         assert result["query"] == "artificial intelligence basics"
         assert result["mode"] == "fast"
 
+    @pytest.mark.xfail(reason="Deep research frequently hits rate limits in CI")
     @pytest.mark.asyncio
     async def test_start_deep_web_research(self, client, temp_notebook):
         """Test starting deep web research."""

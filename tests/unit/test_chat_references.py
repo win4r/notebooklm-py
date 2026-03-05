@@ -20,6 +20,12 @@ def auth_tokens():
     )
 
 
+@pytest.fixture
+def chat_api(auth_tokens):
+    """Provides a ChatAPI instance for testing."""
+    return NotebookLMClient(auth_tokens).chat
+
+
 class TestParseCitations:
     """Unit tests for the _parse_citations method."""
 
@@ -235,6 +241,203 @@ class TestParseCitations:
         assert len(refs) == 1
         assert refs[0].source_id == "12345678-1234-1234-1234-123456789012"
         assert refs[0].cited_text is None  # Text not available
+
+
+class TestAnswerExtraction:
+    """Tests for answer extraction from response chunks (issue #118).
+
+    The answer parsing must handle:
+    - Responses without the type_info[-1]==1 answer marker
+    - Short answers below the minimum length threshold
+    """
+
+    @staticmethod
+    def _build_response(*chunks: list) -> str:
+        """Build a streaming response string from one or more inner_data chunks."""
+        parts = [")]}'"]
+        for chunk in chunks:
+            inner_json = json.dumps(chunk)
+            chunk_json = json.dumps([["wrb.fr", None, inner_json]])
+            parts.append(f"\n{len(chunk_json)}\n{chunk_json}")
+        parts.append("\n")
+        return "".join(parts)
+
+    def test_extract_answer_without_answer_marker(self, chat_api):
+        """Test that answers are extracted even when type_info[-1] != 1.
+
+        Google's API may change the answer marker. The parser should
+        still extract valid text content as the answer.
+        """
+        inner_data = [
+            [
+                "This is a valid answer from NotebookLM about the topic.",
+                None,
+                ["chunk-id", 12345],
+                None,
+                [[], None, None, []],  # No trailing 1 marker
+            ]
+        ]
+
+        answer, refs, _ = chat_api._parse_ask_response_with_references(
+            self._build_response(inner_data)
+        )
+        assert answer == "This is a valid answer from NotebookLM about the topic."
+
+    def test_extract_answer_with_different_marker_value(self, chat_api):
+        """Test extraction when marker value changes from 1 to something else."""
+        inner_data = [
+            [
+                "The answer text that should be extracted regardless of marker.",
+                None,
+                ["chunk-id", 12345],
+                None,
+                [[], None, None, [], 2],  # Different marker value
+            ]
+        ]
+
+        answer, refs, _ = chat_api._parse_ask_response_with_references(
+            self._build_response(inner_data)
+        )
+        assert answer == "The answer text that should be extracted regardless of marker."
+
+    def test_extract_short_answer(self, chat_api):
+        """Test that short answers (< 20 chars) are extracted.
+
+        The user may ask 'Respond with exactly: OK' and get a short answer.
+        """
+        inner_data = [
+            [
+                "OK",
+                None,
+                ["chunk-id", 12345],
+                None,
+                [[], None, None, [], 1],
+            ]
+        ]
+
+        answer, refs, _ = chat_api._parse_ask_response_with_references(
+            self._build_response(inner_data)
+        )
+        assert answer == "OK"
+
+    def test_extract_answer_no_type_info_at_all(self, chat_api):
+        """Test extraction when first[4] is entirely missing."""
+        inner_data = [
+            [
+                "An answer with no type_info metadata at all in the response.",
+                None,
+                ["chunk-id", 12345],
+                None,
+                # No first[4]
+            ]
+        ]
+
+        answer, refs, _ = chat_api._parse_ask_response_with_references(
+            self._build_response(inner_data)
+        )
+        assert answer == "An answer with no type_info metadata at all in the response."
+
+    def test_shorter_marked_answer_beats_longer_unmarked(self, chat_api):
+        """Shorter marked answer should win over longer unmarked text."""
+        # Unmarked chunk is much longer
+        unmarked_data = [
+            [
+                "This is a very long status message or streaming preamble that contains lots of text but is not the actual answer to the question.",
+                None,
+                ["chunk-1", 11111],
+                None,
+                [[], None, None, []],  # No marker
+            ]
+        ]
+        # Marked chunk is shorter but is the real answer
+        marked_data = [
+            [
+                "The actual short answer.",
+                None,
+                ["chunk-2", 22222],
+                None,
+                [[], None, None, [], 1],  # Has marker
+            ]
+        ]
+
+        answer, refs, _ = chat_api._parse_ask_response_with_references(
+            self._build_response(unmarked_data, marked_data)
+        )
+        assert answer == "The actual short answer."
+
+    def test_skips_empty_and_non_string_text(self, chat_api):
+        """Empty strings, None, and non-string first[0] values are skipped."""
+        # Chunk with empty string text
+        empty_data = [
+            [
+                "",
+                None,
+                ["chunk-1", 11111],
+                None,
+                [[], None, None, [], 1],
+            ]
+        ]
+        # Chunk with None text
+        none_data = [
+            [
+                None,
+                None,
+                ["chunk-2", 22222],
+                None,
+                [[], None, None, [], 1],
+            ]
+        ]
+        # Chunk with integer text
+        int_data = [
+            [
+                42,
+                None,
+                ["chunk-3", 33333],
+                None,
+                [[], None, None, [], 1],
+            ]
+        ]
+        # Valid chunk that should be selected
+        valid_data = [
+            [
+                "The valid answer after invalid chunks.",
+                None,
+                ["chunk-4", 44444],
+                None,
+                [[], None, None, [], 1],
+            ]
+        ]
+
+        answer, refs, _ = chat_api._parse_ask_response_with_references(
+            self._build_response(empty_data, none_data, int_data, valid_data)
+        )
+        assert answer == "The valid answer after invalid chunks."
+
+    def test_prefers_marked_answer_over_unmarked(self, chat_api):
+        """When both marked and unmarked answers exist, prefer the marked one."""
+        unmarked_data = [
+            [
+                "This is a status message or partial streaming chunk text.",
+                None,
+                ["chunk-1", 11111],
+                None,
+                [[], None, None, []],  # No marker
+            ]
+        ]
+        marked_data = [
+            [
+                "This is the real answer with proper marker.",
+                None,
+                ["chunk-2", 22222],
+                None,
+                [[], None, None, [], 1],  # Has marker
+            ]
+        ]
+
+        answer, refs, _ = chat_api._parse_ask_response_with_references(
+            self._build_response(unmarked_data, marked_data)
+        )
+        assert answer == "This is the real answer with proper marker."
 
 
 class TestChatReferenceDataclass:

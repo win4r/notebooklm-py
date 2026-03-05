@@ -1,0 +1,41 @@
+interactions:
+- request:
+    body: f.req=SCRUBBED&at=SCRUBBED_CSRF
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/x-www-form-urlencoded
+      Cookie:
+      - SID=SCRUBBED; HSID=SCRUBBED; SSID=SCRUBBED; APISID=SCRUBBED; SAPISID=SCRUBBED
+      Host:
+      - notebooklm.google.com
+      User-Agent:
+      - python-httpx/0.28.1
+    method: POST
+    uri: https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?rpcids=KmcKPe&source-path=%2Fnotebook%2Ftest_notebook_id&f.sid=SCRUBBED&rt=c
+  response:
+    body:
+      string: ')]}''
+
+
+        99
+
+        [["wrb.fr", "KmcKPe", "[[\"artifact_456\", \"Slide Deck\", \"2024-01-05\",
+        null, 1]]", null, null]]
+
+        '
+    headers:
+      Cache-Control:
+      - no-cache, no-store, max-age=0, must-revalidate
+      Content-Type:
+      - application/json; charset=utf-8
+    status:
+      code: 200
+      message: OK
+    url: https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?rpcids=KmcKPe&source-path=%2Fnotebook%2Ftest_notebook_id&f.sid=SCRUBBED&rt=c
+version: 1

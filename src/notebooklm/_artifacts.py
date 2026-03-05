@@ -19,6 +19,7 @@ import httpx
 from ._artifact_download import ArtifactDownloader
 from ._artifact_generate import ArtifactGenerator
 from ._core import ClientCore
+from .exceptions import ValidationError
 from .rpc import (
     ArtifactStatus,
     ArtifactTypeCode,
@@ -274,6 +275,7 @@ class ArtifactsAPI:
         source_ids: builtins.list[str] | None = None,
         language: str = "en",
         custom_prompt: str | None = None,
+        extra_instructions: str | None = None,
     ) -> GenerationStatus:
         """Generate a report artifact.
 
@@ -282,13 +284,17 @@ class ArtifactsAPI:
             report_format: BRIEFING_DOC, STUDY_GUIDE, BLOG_POST, or CUSTOM.
             source_ids: Source IDs to include. If None, uses all sources.
             language: Language code (default: "en").
-            custom_prompt: Required for CUSTOM format.
+            custom_prompt: Prompt for CUSTOM format. Falls back to a generic
+                default if None.
+            extra_instructions: Additional instructions appended to the built-in
+                template prompt. Ignored when report_format is CUSTOM; for custom
+                reports, embed all instructions in custom_prompt instead.
 
         Returns:
             GenerationStatus with task_id for polling.
         """
         return await self._generator.generate_report(
-            notebook_id, report_format, source_ids, language, custom_prompt
+            notebook_id, report_format, source_ids, language, custom_prompt, extra_instructions
         )
 
     async def generate_study_guide(
@@ -296,6 +302,7 @@ class ArtifactsAPI:
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
         language: str = "en",
+        extra_instructions: str | None = None,
     ) -> GenerationStatus:
         """Generate a study guide report.
 
@@ -305,11 +312,18 @@ class ArtifactsAPI:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
             language: Language code (default: "en").
+            extra_instructions: Additional instructions appended to the default template.
 
         Returns:
             GenerationStatus with task_id for polling.
         """
-        return await self._generator.generate_study_guide(notebook_id, source_ids, language)
+        return await self.generate_report(
+            notebook_id,
+            report_format=ReportFormat.STUDY_GUIDE,
+            source_ids=source_ids,
+            language=language,
+            extra_instructions=extra_instructions,
+        )
 
     async def generate_quiz(
         self,
@@ -411,6 +425,56 @@ class ArtifactsAPI:
             notebook_id, source_ids, language, instructions, slide_format, slide_length
         )
 
+    async def revise_slide(
+        self,
+        notebook_id: str,
+        artifact_id: str,
+        slide_index: int,
+        prompt: str,
+    ) -> GenerationStatus:
+        """Revise an individual slide in a completed slide deck using a prompt.
+
+        The slide deck must already be generated (status=COMPLETED) before
+        calling this method. Use poll_status() to wait for the revision to complete.
+
+        Args:
+            notebook_id: The notebook ID.
+            artifact_id: The slide deck artifact ID to revise.
+            slide_index: Zero-based index of the slide to revise.
+            prompt: Natural language instruction for the revision
+                    (e.g. "Move the title up", "Remove taxonomy section").
+
+        Returns:
+            GenerationStatus with task_id for polling.
+        """
+        if slide_index < 0:
+            raise ValidationError(f"slide_index must be >= 0, got {slide_index}")
+
+        params = [
+            [2],
+            artifact_id,
+            [[[slide_index, prompt]]],
+        ]
+        try:
+            result = await self._core.rpc_call(
+                RPCMethod.REVISE_SLIDE,
+                params,
+                source_path=f"/notebook/{notebook_id}",
+                allow_null=True,
+            )
+            if result is None:
+                logger.warning("REVISE_SLIDE returned null result for artifact %s", artifact_id)
+            return self._generator._parse_generation_result(result)
+        except RPCError as e:
+            if e.rpc_code == "USER_DISPLAYABLE_ERROR":
+                return GenerationStatus(
+                    task_id="",
+                    status="failed",
+                    error=str(e),
+                    error_code=str(e.rpc_code) if e.rpc_code is not None else None,
+                )
+            raise
+
     async def generate_data_table(
         self,
         notebook_id: str,
@@ -502,19 +566,26 @@ class ArtifactsAPI:
         return await self._downloader.download_infographic(notebook_id, output_path, artifact_id)
 
     async def download_slide_deck(
-        self, notebook_id: str, output_path: str, artifact_id: str | None = None
+        self,
+        notebook_id: str,
+        output_path: str,
+        artifact_id: str | None = None,
+        output_format: str = "pdf",
     ) -> str:
-        """Download a slide deck as a PDF file.
+        """Download a slide deck as PDF or PPTX.
 
         Args:
             notebook_id: The notebook ID.
-            output_path: Path to save the PDF file.
+            output_path: Path to save the file.
             artifact_id: Specific artifact ID, or uses first completed slide deck.
+            output_format: Download format: "pdf" (default) or "pptx".
 
         Returns:
             The output path.
         """
-        return await self._downloader.download_slide_deck(notebook_id, output_path, artifact_id)
+        return await self._downloader.download_slide_deck(
+            notebook_id, output_path, artifact_id, output_format
+        )
 
     async def download_report(
         self,

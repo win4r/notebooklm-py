@@ -2,7 +2,11 @@
 
 import pytest
 
-from notebooklm.cli.download_helpers import artifact_title_to_filename, select_artifact
+from notebooklm.cli.download_helpers import (
+    artifact_title_to_filename,
+    resolve_partial_artifact_id,
+    select_artifact,
+)
 
 
 class TestSelectArtifact:
@@ -126,6 +130,70 @@ class TestSelectArtifact:
 
         with pytest.raises(ValueError, match="Cannot specify both"):
             select_artifact(artifacts, latest=True, earliest=True)
+
+
+class TestResolvePartialArtifactId:
+    def test_full_id_returned_unchanged(self):
+        """Full IDs (20+ chars) should bypass prefix search and return as-is."""
+        artifacts = [{"id": "abcdefghij1234567890", "title": "A", "created_at": 1000}]
+
+        result = resolve_partial_artifact_id(artifacts, "abcdefghij1234567890")
+
+        assert result == "abcdefghij1234567890"
+
+    def test_partial_id_resolves_to_full(self):
+        """Partial prefix should resolve to the matching full ID."""
+        artifacts = [
+            {"id": "abc123def456", "title": "First", "created_at": 1000},
+            {"id": "xyz789ghi012", "title": "Second", "created_at": 2000},
+        ]
+
+        result = resolve_partial_artifact_id(artifacts, "abc")
+
+        assert result == "abc123def456"
+
+    def test_partial_id_case_insensitive(self):
+        """Prefix match should be case-insensitive."""
+        artifacts = [{"id": "ABC123def456", "title": "First", "created_at": 1000}]
+
+        result = resolve_partial_artifact_id(artifacts, "abc")
+
+        assert result == "ABC123def456"
+
+    def test_ambiguous_partial_id_raises(self):
+        """Should raise ValueError when prefix matches multiple artifacts."""
+        artifacts = [
+            {"id": "abc111", "title": "First", "created_at": 1000},
+            {"id": "abc222", "title": "Second", "created_at": 2000},
+        ]
+
+        with pytest.raises(ValueError, match="[Aa]mbiguous"):
+            resolve_partial_artifact_id(artifacts, "abc")
+
+    def test_no_match_raises(self):
+        """Should raise ValueError when prefix matches nothing."""
+        artifacts = [{"id": "xyz999", "title": "Only", "created_at": 1000}]
+
+        with pytest.raises(ValueError, match="not found"):
+            resolve_partial_artifact_id(artifacts, "abc")
+
+    def test_empty_list_raises(self):
+        """Should raise ValueError for any input when artifact list is empty."""
+        with pytest.raises(ValueError, match="not found"):
+            resolve_partial_artifact_id([], "abc")
+
+    def test_ambiguous_error_includes_titles(self):
+        """Ambiguous error message should include artifact titles to help the user."""
+        artifacts = [
+            {"id": "abc111", "title": "Meeting Notes", "created_at": 1000},
+            {"id": "abc222", "title": "Debate Session", "created_at": 2000},
+        ]
+
+        with pytest.raises(ValueError) as exc_info:
+            resolve_partial_artifact_id(artifacts, "abc")
+
+        assert "Meeting Notes" in str(exc_info.value)
+        assert "Debate Session" in str(exc_info.value)
 
 
 class TestArtifactTitleToFilename:

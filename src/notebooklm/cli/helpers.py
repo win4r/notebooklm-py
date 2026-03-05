@@ -123,16 +123,51 @@ def get_auth_tokens(ctx) -> AuthTokens:
 # =============================================================================
 
 
-def get_current_notebook() -> str | None:
-    """Get the current notebook ID from context."""
+def _get_context_value(key: str) -> str | None:
+    """Read a single value from context.json."""
     context_file = get_context_path()
     if not context_file.exists():
         return None
     try:
         data = json.loads(context_file.read_text(encoding="utf-8"))
-        return data.get("notebook_id")
-    except (OSError, json.JSONDecodeError):
+        return data.get(key)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Context file %s is corrupted; cannot read '%s'. Run 'notebooklm clear' to reset.",
+            context_file,
+            key,
+        )
         return None
+    except OSError as e:
+        logger.warning("Cannot read context file %s: %s", context_file, e)
+        return None
+
+
+def _set_context_value(key: str, value: str | None) -> None:
+    """Set or clear a single value in context.json."""
+    context_file = get_context_path()
+    if not context_file.exists():
+        return
+    try:
+        data = json.loads(context_file.read_text(encoding="utf-8"))
+        if value is not None:
+            data[key] = value
+        elif key in data:
+            del data[key]
+        context_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except json.JSONDecodeError:
+        logger.warning(
+            "Context file %s is corrupted; cannot update '%s'. Run 'notebooklm clear' to reset.",
+            context_file,
+            key,
+        )
+    except OSError as e:
+        logger.warning("Failed to write context file %s for key '%s': %s", context_file, key, e)
+
+
+def get_current_notebook() -> str | None:
+    """Get the current notebook ID from context."""
+    return _get_context_value("notebook_id")
 
 
 def set_current_notebook(
@@ -143,19 +178,11 @@ def set_current_notebook(
 ):
     """Set the current notebook context.
 
-    If switching to a different notebook, the cached conversation_id is cleared
-    since conversations are notebook-specific.
+    conversation_id is never preserved — the server owns the canonical ID per
+    notebook, and a stale local value would silently use the wrong UUID.
     """
     context_file = get_context_path()
     context_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Read existing context if available
-    current_context: dict = {}
-    if context_file.exists():
-        try:
-            current_context = json.loads(context_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            pass  # Start with fresh context if file is corrupt
 
     data: dict[str, str | bool] = {"notebook_id": notebook_id}
     if title:
@@ -164,10 +191,6 @@ def set_current_notebook(
         data["is_owner"] = is_owner
     if created_at:
         data["created_at"] = created_at
-
-    # Preserve conversation_id only if staying in the same notebook
-    if current_context.get("notebook_id") == notebook_id and "conversation_id" in current_context:
-        data["conversation_id"] = current_context["conversation_id"]
 
     context_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -181,30 +204,12 @@ def clear_context():
 
 def get_current_conversation() -> str | None:
     """Get the current conversation ID from context."""
-    context_file = get_context_path()
-    if not context_file.exists():
-        return None
-    try:
-        data = json.loads(context_file.read_text(encoding="utf-8"))
-        return data.get("conversation_id")
-    except (OSError, json.JSONDecodeError):
-        return None
+    return _get_context_value("conversation_id")
 
 
 def set_current_conversation(conversation_id: str | None):
     """Set or clear the current conversation ID in context."""
-    context_file = get_context_path()
-    if not context_file.exists():
-        return
-    try:
-        data = json.loads(context_file.read_text(encoding="utf-8"))
-        if conversation_id:
-            data["conversation_id"] = conversation_id
-        elif "conversation_id" in data:
-            del data["conversation_id"]
-        context_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    except (OSError, json.JSONDecodeError):
-        pass
+    _set_context_value("conversation_id", conversation_id)
 
 
 def validate_id(entity_id: str, entity_name: str = "ID") -> str:

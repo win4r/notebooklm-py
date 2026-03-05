@@ -352,7 +352,8 @@ class TestNotebookHistory:
     def test_notebook_history(self, runner, mock_auth):
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=[[["conv_1"], ["conv_2"]]])
+            mock_client.chat.get_history = AsyncMock(return_value=[("Q1?", "A1"), ("Q2?", "A2")])
+            mock_client.chat.get_conversation_id = AsyncMock(return_value="conv_001")
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -365,7 +366,8 @@ class TestNotebookHistory:
     def test_notebook_history_empty(self, runner, mock_auth):
         with patch_main_cli_client() as mock_client_cls:
             mock_client = create_mock_client()
-            mock_client.chat.get_history = AsyncMock(return_value=None)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
+            mock_client.chat.get_history = AsyncMock(return_value=[])
             mock_client_cls.return_value = mock_client
 
             with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
@@ -406,7 +408,7 @@ class TestNotebookAsk:
                     turn_number=1,
                 )
             )
-            mock_client.chat.get_history = AsyncMock(return_value=None)
+            mock_client.chat.get_conversation_id = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
             with (
@@ -421,28 +423,6 @@ class TestNotebookAsk:
 
             assert result.exit_code == 0
             assert "This is the answer" in result.output
-
-    def test_notebook_ask_new_conversation(self, runner, mock_auth):
-        with patch_main_cli_client() as mock_client_cls:
-            mock_client = create_mock_client()
-            mock_client.chat.ask = AsyncMock(
-                return_value=AskResult(
-                    answer="Fresh answer",
-                    conversation_id="new_conv",
-                    is_follow_up=False,
-                    turn_number=1,
-                )
-            )
-            mock_client_cls.return_value = mock_client
-
-            with patch("notebooklm.cli.helpers.fetch_tokens", new_callable=AsyncMock) as mock_fetch:
-                mock_fetch.return_value = ("csrf", "session")
-                result = runner.invoke(cli, ["ask", "-n", "nb_123", "--new", "Fresh question"])
-
-            assert result.exit_code == 0
-            assert (
-                "Starting new conversation" in result.output or "New conversation" in result.output
-            )
 
     def test_notebook_ask_continue_conversation(self, runner, mock_auth):
         with patch_main_cli_client() as mock_client_cls:

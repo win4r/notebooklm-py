@@ -100,7 +100,8 @@ Before starting workflows, verify the CLI is ready:
 - `notebooklm research wait` - wait for research (in subagent context)
 - `notebooklm use <id>` - set context (⚠️ SINGLE-AGENT ONLY - use `-n` flag in parallel workflows)
 - `notebooklm create` - create notebook
-- `notebooklm ask "..."` - chat queries
+- `notebooklm ask "..."` - chat queries (without `--save-as-note`)
+- `notebooklm history` - display conversation history (read-only)
 - `notebooklm source add` - add sources
 
 **Ask before running:**
@@ -110,6 +111,8 @@ Before starting workflows, verify the CLI is ready:
 - `notebooklm artifact wait` - long-running (when in main conversation)
 - `notebooklm source wait` - long-running (when in main conversation)
 - `notebooklm research wait` - long-running (when in main conversation)
+- `notebooklm ask "..." --save-as-note` - writes a note
+- `notebooklm history --save` - writes a note
 
 ## Quick Reference
 
@@ -132,20 +135,30 @@ Before starting workflows, verify the CLI is ready:
 | Check research status | `notebooklm research status` |
 | Wait for research | `notebooklm research wait --import-all` |
 | Chat | `notebooklm ask "question"` |
-| Chat (new conversation) | `notebooklm ask "question" --new` |
 | Chat (specific sources) | `notebooklm ask "question" -s src_id1 -s src_id2` |
 | Chat (with references) | `notebooklm ask "question" --json` |
+| Chat (save answer as note) | `notebooklm ask "question" --save-as-note` |
+| Chat (save with title) | `notebooklm ask "question" --save-as-note --note-title "Title"` |
+| Show conversation history | `notebooklm history` |
+| Save all history as note | `notebooklm history --save` |
+| Continue specific conversation | `notebooklm ask "question" -c <conversation_id>` |
+| Save history with title | `notebooklm history --save --note-title "My Research"` |
 | Get source fulltext | `notebooklm source fulltext <source_id>` |
 | Get source guide | `notebooklm source guide <source_id>` |
 | Generate podcast | `notebooklm generate audio "instructions"` |
 | Generate podcast (JSON) | `notebooklm generate audio --json` |
 | Generate podcast (specific sources) | `notebooklm generate audio -s src_id1 -s src_id2` |
 | Generate video | `notebooklm generate video "instructions"` |
+| Generate report | `notebooklm generate report --format briefing-doc` |
+| Generate report (append instructions) | `notebooklm generate report --format study-guide --append "Target audience: beginners"` |
 | Generate quiz | `notebooklm generate quiz` |
+| Revise a slide | `notebooklm generate revise-slide "prompt" --artifact <id> --slide 0` |
 | Check artifact status | `notebooklm artifact list` |
 | Wait for completion | `notebooklm artifact wait <artifact_id>` |
 | Download audio | `notebooklm download audio ./output.mp3` |
 | Download video | `notebooklm download video ./output.mp4` |
+| Download slide deck (PDF) | `notebooklm download slide-deck ./slides.pdf` |
+| Download slide deck (PPTX) | `notebooklm download slide-deck ./slides.pptx --format pptx` |
 | Download report | `notebooklm download report ./report.md` |
 | Download mind map | `notebooklm download mind-map ./map.json` |
 | Download data table | `notebooklm download data-table ./data.csv` |
@@ -160,7 +173,7 @@ Before starting workflows, verify the CLI is ready:
 | Get language | `notebooklm language get` |
 | Set language | `notebooklm language set zh_Hans` |
 
-**Parallel safety:** Use explicit notebook IDs in parallel workflows. Commands supporting `-n` shorthand: `artifact wait`, `source wait`, `research wait/status`, `download *`. Download commands also support `-a/--artifact`. Other commands use `--notebook`. For chat, use `--new` to start fresh conversations (avoids conversation ID conflicts).
+**Parallel safety:** Use explicit notebook IDs in parallel workflows. Commands supporting `-n` shorthand: `artifact wait`, `source wait`, `research wait/status`, `download *`. Download commands also support `-a/--artifact`. Other commands use `--notebook`. For chat, use `-c <conversation_id>` to target a specific conversation.
 
 **Partial IDs:** Use first 6+ characters of UUIDs. Must be unique prefix (fails if ambiguous). Works for: `use`, `delete`, `wait`, `download <uuid>` commands. For automation, prefer full UUIDs to avoid ambiguity.
 
@@ -220,9 +233,10 @@ All generate commands support:
 |------|---------|---------|----------|
 | Podcast | `generate audio` | `--format [deep-dive\|brief\|critique\|debate]`, `--length [short\|default\|long]` | .mp3 |
 | Video | `generate video` | `--format [explainer\|brief]`, `--style [auto\|classic\|whiteboard\|kawaii\|anime\|watercolor\|retro-print\|heritage\|paper-craft]` | .mp4 |
-| Slide Deck | `generate slide-deck` | `--format [detailed\|presenter]`, `--length [default\|short]` | .pdf |
+| Slide Deck | `generate slide-deck` | `--format [detailed\|presenter]`, `--length [default\|short]` | .pdf / .pptx |
+| Slide Revision | `generate revise-slide "prompt" --artifact <id> --slide N` | `--wait`, `--notebook` | *(re-downloads parent deck)* |
 | Infographic | `generate infographic` | `--orientation [landscape\|portrait\|square]`, `--detail [concise\|standard\|detailed]` | .png |
-| Report | `generate report` | `--format [briefing-doc\|study-guide\|blog-post\|custom]` | .md |
+| Report | `generate report` | `--format [briefing-doc\|study-guide\|blog-post\|custom]`, `--append "extra instructions"` | .md |
 | Mind Map | `generate mind-map` | *(sync, instant)* | .json |
 | Data Table | `generate data-table` | description required | .csv |
 | Quiz | `generate quiz` | `--difficulty [easy\|medium\|hard]`, `--quantity [fewer\|standard\|more]` | .json/.md/.html |
@@ -239,7 +253,11 @@ These capabilities are available via CLI but not in NotebookLM's web interface:
 | **Quiz/Flashcard export** | `download quiz --format json` | Export as JSON, Markdown, or HTML (web UI only shows interactive view) |
 | **Mind map extraction** | `download mind-map` | Export hierarchical JSON for visualization tools |
 | **Data table export** | `download data-table` | Download structured tables as CSV |
+| **Slide deck as PPTX** | `download slide-deck --format pptx` | Download slide deck as editable .pptx (web UI only offers PDF) |
+| **Slide revision** | `generate revise-slide "prompt" --artifact <id> --slide N` | Modify individual slides with a natural-language prompt |
+| **Report template append** | `generate report --format study-guide --append "..."` | Append custom instructions to built-in format templates without losing the format type |
 | **Source fulltext** | `source fulltext <id>` | Retrieve the indexed text content of any source |
+| **Save chat to note** | `ask "..." --save-as-note` / `history --save` | Save Q&A answers or conversation history as notebook notes |
 | **Programmatic sharing** | `share` commands | Manage sharing permissions without the UI |
 
 ## Common Workflows

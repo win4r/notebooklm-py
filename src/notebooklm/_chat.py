@@ -21,14 +21,13 @@ from .types import AskResult, ChatReference, ConversationTurn
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_BL = "boq_labs-tailwind-frontend_20260301.03_p0"
+
 # UUID pattern for validating source IDs (compiled once at module level)
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
-
-# Minimum answer length to be considered valid (filters out status messages)
-_MIN_ANSWER_LENGTH = 20
 
 
 class ChatAPI:
@@ -106,12 +105,16 @@ class ChatAPI:
 
         sources_array = [[[sid]] for sid in source_ids] if source_ids else []
 
-        params = [
+        params: list[Any] = [
             sources_array,
             question,
             conversation_history,
-            [2, None, [1]],
+            [2, None, [1], [1]],
             conversation_id,
+            None,  # [5] - always null
+            None,  # [6] - always null
+            notebook_id,  # [7] - required for server-side conversation persistence
+            1,  # [8] - always 1
         ]
 
         params_json = json.dumps(params, separators=(",", ":"))
@@ -129,7 +132,7 @@ class ChatAPI:
 
         self._core._reqid_counter += 100000
         url_params = {
-            "bl": os.environ.get("NOTEBOOKLM_BL", "boq_labs-tailwind-frontend_20251221.14_p0"),
+            "bl": os.environ.get("NOTEBOOKLM_BL", _DEFAULT_BL),
             "hl": "en",
             "_reqid": str(self._core._reqid_counter),
             "rt": "c",
@@ -157,7 +160,13 @@ class ChatAPI:
                 original_error=e,
             ) from e
 
-        answer_text, references = self._parse_ask_response_with_references(response.text)
+        answer_text, references, server_conv_id = self._parse_ask_response_with_references(
+            response.text
+        )
+        # Prefer the conversation ID returned by the server over our locally generated UUID,
+        # so that get_conversation_id() and get_conversation_turns() stay in sync.
+        if server_conv_id:
+            conversation_id = server_conv_id
 
         turns = self._core.get_cached_conversation(conversation_id)
         if answer_text:
@@ -175,23 +184,144 @@ class ChatAPI:
             raw_response=response.text[:1000],
         )
 
-    async def get_history(self, notebook_id: str, limit: int = 20) -> Any:
-        """Get conversation history from the API.
+    async def get_conversation_turns(
+        self, notebook_id: str, conversation_id: str, limit: int = 2
+    ) -> Any:
+        """Get turns (individual messages) for a specific conversation.
 
         Args:
             notebook_id: The notebook ID.
-            limit: Maximum number of conversations to retrieve.
+            conversation_id: The conversation ID to fetch turns for.
+            limit: Maximum number of turns to retrieve. Turns are returned
+                newest-first, so limit=2 gives the latest Q&A pair.
 
         Returns:
-            Raw conversation history data from API.
+            Raw turn data from API. Each turn has:
+              turn[2] == 1: user question, text at turn[3]
+              turn[2] == 2: AI answer, text at turn[4][0][0]
         """
-        logger.debug("Getting conversation history for notebook %s (limit=%d)", notebook_id, limit)
-        params: list[Any] = [[], None, notebook_id, limit]
+        logger.debug(
+            "Getting conversation turns for %s (conversation=%s, limit=%d)",
+            notebook_id,
+            conversation_id,
+            limit,
+        )
+        params: list[Any] = [[], None, None, conversation_id, limit]
         return await self._core.rpc_call(
-            RPCMethod.GET_CONVERSATION_HISTORY,
+            RPCMethod.GET_CONVERSATION_TURNS,
             params,
             source_path=f"/notebook/{notebook_id}",
         )
+
+    async def get_conversation_id(self, notebook_id: str) -> str | None:
+        """Get the most recent conversation ID from the API.
+
+        The underlying RPC (hPTbtc) returns the last conversation ID for a notebook.
+
+        Args:
+            notebook_id: The notebook ID.
+
+        Returns:
+            The most recent conversation ID, or None if no conversations exist.
+        """
+        logger.debug("Getting conversation ID for notebook %s", notebook_id)
+        params: list[Any] = [[], None, notebook_id, 1]
+        raw = await self._core.rpc_call(
+            RPCMethod.GET_LAST_CONVERSATION_ID,
+            params,
+            source_path=f"/notebook/{notebook_id}",
+        )
+        # Response structure: [[[conv_id]]]
+        if raw and isinstance(raw, list):
+            for group in raw:
+                if isinstance(group, list):
+                    for conv in group:
+                        if isinstance(conv, list) and conv and isinstance(conv[0], str):
+                            return conv[0]
+            logger.debug(
+                "No conversation ID found in response (API structure may have changed): %s",
+                raw,
+            )
+        return None
+
+    async def get_history(
+        self,
+        notebook_id: str,
+        limit: int = 100,
+        conversation_id: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """Get Q&A history for the most recent conversation.
+
+        Args:
+            notebook_id: The notebook ID.
+            limit: Maximum number of Q&A turns to retrieve.
+            conversation_id: Use this conversation ID instead of fetching it.
+                Defaults to the most recent conversation if not provided.
+
+        Returns:
+            List of (question, answer) pairs, oldest-first.
+            Returns an empty list if no conversations exist.
+        """
+        logger.debug("Getting conversation history for notebook %s (limit=%d)", notebook_id, limit)
+        conv_id = conversation_id or await self.get_conversation_id(notebook_id)
+        if not conv_id:
+            return []
+
+        try:
+            turns_data = await self.get_conversation_turns(notebook_id, conv_id, limit=limit)
+        except (ChatError, NetworkError) as e:
+            logger.warning("Failed to fetch conversation turns for %s: %s", notebook_id, e)
+            return []
+        # API returns individual turns newest-first: [A2, Q2, A1, Q1, ...]
+        # Reverse to chronological order [Q1, A1, Q2, A2, ...] so the
+        # Q→A forward-pairing parser works correctly.
+        if (
+            turns_data
+            and isinstance(turns_data, list)
+            and turns_data[0]
+            and isinstance(turns_data[0], list)
+        ):
+            turns_data = [list(reversed(turns_data[0]))]
+        return self._parse_turns_to_qa_pairs(turns_data)
+
+    @staticmethod
+    def _parse_turns_to_qa_pairs(turns_data: Any) -> list[tuple[str, str]]:
+        """Parse raw turn data into (question, answer) pairs in array order.
+
+        Pairs are returned in the same order as the input data (newest-first
+        from the API). Callers should reverse if oldest-first is needed.
+        Each user question (turn[2]==1) is followed by its AI answer (turn[2]==2).
+        """
+        if not turns_data or not isinstance(turns_data, list):
+            return []
+        first = turns_data[0]
+        if not isinstance(first, list):
+            return []
+
+        turns = first
+
+        pairs: list[tuple[str, str]] = []
+        i = 0
+        while i < len(turns):
+            turn = turns[i]
+            if not isinstance(turn, list) or len(turn) < 3:
+                i += 1
+                continue
+            if turn[2] == 1 and len(turn) > 3:
+                q = str(turn[3] or "")
+                a = ""
+                # Look for the answer immediately following
+                if i + 1 < len(turns):
+                    next_turn = turns[i + 1]
+                    if isinstance(next_turn, list) and len(next_turn) > 4 and next_turn[2] == 2:
+                        try:
+                            a = str(next_turn[4][0][0] or "")
+                        except (IndexError, TypeError):
+                            pass
+                        i += 1  # skip the answer turn
+                pairs.append((q, a))
+            i += 1
+        return pairs
 
     def get_cached_turns(self, conversation_id: str) -> list[ConversationTurn]:
         """Get locally cached conversation turns.
@@ -305,27 +435,35 @@ class ChatAPI:
 
     def _parse_ask_response_with_references(
         self, response_text: str
-    ) -> tuple[str, list[ChatReference]]:
-        """Parse the streaming response to extract answer and references.
+    ) -> tuple[str, list[ChatReference], str | None]:
+        """Parse the streaming response to extract answer, references, and conversation ID.
 
         Returns:
-            Tuple of (answer_text, list of ChatReference objects).
+            Tuple of (answer_text, list of ChatReference objects, server_conversation_id).
+            server_conversation_id is None if not present in the response.
         """
 
         if response_text.startswith(")]}'"):
             response_text = response_text[4:]
 
         lines = response_text.strip().split("\n")
-        longest_answer = ""
+        best_marked_answer = ""
+        best_unmarked_answer = ""
         all_references: list[ChatReference] = []
+        server_conv_id: str | None = None
 
         def process_chunk(json_str: str) -> None:
-            """Process a JSON chunk, updating longest_answer and all_references."""
-            nonlocal longest_answer
-            text, is_answer, refs = self._extract_answer_and_refs_from_chunk(json_str)
-            if text and is_answer and len(text) > len(longest_answer):
-                longest_answer = text
+            """Process a JSON chunk, updating best answers and all_references."""
+            nonlocal best_marked_answer, best_unmarked_answer, server_conv_id
+            text, is_answer, refs, conv_id = self._extract_answer_and_refs_from_chunk(json_str)
+            if text:
+                if is_answer and len(text) > len(best_marked_answer):
+                    best_marked_answer = text
+                elif not is_answer and len(text) > len(best_unmarked_answer):
+                    best_unmarked_answer = text
             all_references.extend(refs)
+            if conv_id:
+                server_conv_id = conv_id
 
         i = 0
         while i < len(lines):
@@ -344,8 +482,21 @@ class ChatAPI:
                 process_chunk(line)
                 i += 1
 
+        # Prefer marked answers; fall back to longest unmarked text
+        if best_marked_answer:
+            longest_answer = best_marked_answer
+        elif best_unmarked_answer:
+            logger.warning(
+                "No marked answer found; falling back to longest unmarked "
+                "text (%d chars). The API response format may have changed.",
+                len(best_unmarked_answer),
+            )
+            longest_answer = best_unmarked_answer
+        else:
+            longest_answer = ""
+
         if not longest_answer:
-            logger.debug(
+            logger.warning(
                 "No answer extracted from response (%d lines parsed)",
                 len(lines),
             )
@@ -355,17 +506,17 @@ class ChatAPI:
             if ref.citation_number is None:
                 ref.citation_number = idx
 
-        return longest_answer, all_references
+        return longest_answer, all_references, server_conv_id
 
     def _extract_answer_and_refs_from_chunk(
         self, json_str: str
-    ) -> tuple[str | None, bool, list[ChatReference]]:
-        """Extract answer text and references from a response chunk.
+    ) -> tuple[str | None, bool, list[ChatReference], str | None]:
+        """Extract answer text, references, and conversation ID from a response chunk.
 
         Response structure (discovered via reverse engineering):
         - first[0]: answer text
         - first[1]: None
-        - first[2]: [chunk_id_1, chunk_id_2, ..., session_hash] - chunk IDs (NOT source IDs)
+        - first[2]: [conversation_id, numeric_hash]
         - first[3]: None
         - first[4]: Citation metadata
           - first[4][0]: Per-source citation positions with text spans
@@ -375,18 +526,21 @@ class ChatAPI:
             - cite[1][4]: array of [text_passage, char_positions] items
             - cite[1][5][0][0][0]: parent SOURCE ID (this is the real source UUID)
 
+        When item[2] is null and item[5] contains a UserDisplayableError, raises
+        ChatError with a rate-limit message.
+
         Returns:
-            Tuple of (text, is_answer, references).
+            Tuple of (text, is_answer, references, server_conversation_id).
         """
         refs: list[ChatReference] = []
 
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            return None, False, refs
+            return None, False, refs, None
 
         if not isinstance(data, list):
-            return None, False, refs
+            return None, False, refs, None
 
         for item in data:
             if not isinstance(item, list) or len(item) < 3:
@@ -396,6 +550,9 @@ class ChatAPI:
 
             inner_json = item[2]
             if not isinstance(inner_json, str):
+                # item[2] is null — check item[5] for a server-side error payload
+                if len(item) > 5 and isinstance(item[5], list):
+                    self._raise_if_rate_limited(item[5])
                 continue
 
             try:
@@ -404,22 +561,56 @@ class ChatAPI:
                     first = inner_data[0]
                     if isinstance(first, list) and len(first) > 0:
                         text = first[0]
-                        is_answer = False
-                        if isinstance(text, str) and len(text) > _MIN_ANSWER_LENGTH:
-                            if len(first) > 4 and isinstance(first[4], list):
-                                type_info = first[4]
-                                if len(type_info) > 0 and type_info[-1] == 1:
-                                    is_answer = True
+                        if not isinstance(text, str) or not text:
+                            continue
 
-                            # Extract references from first[4][3] - the detailed citation array
-                            # Each citation contains chunk ID, parent source ID, and cited text
-                            refs = self._parse_citations(first)
+                        is_answer = (
+                            len(first) > 4
+                            and isinstance(first[4], list)
+                            and len(first[4]) > 0
+                            and first[4][-1] == 1
+                        )
 
-                            return text, is_answer, refs
+                        # Extract the server-assigned conversation ID from first[2]
+                        server_conv_id: str | None = None
+                        if (
+                            len(first) > 2
+                            and isinstance(first[2], list)
+                            and first[2]
+                            and isinstance(first[2][0], str)
+                        ):
+                            server_conv_id = first[2][0]
+
+                        refs = self._parse_citations(first)
+                        return text, is_answer, refs, server_conv_id
             except json.JSONDecodeError:
                 continue
 
-        return None, False, refs
+        return None, False, refs, None
+
+    def _raise_if_rate_limited(self, error_payload: list) -> None:
+        """Raise ChatError if the payload contains a UserDisplayableError.
+
+        Args:
+            error_payload: The item[5] list from a wrb.fr response chunk.
+
+        Raises:
+            ChatError: When a UserDisplayableError is detected.
+        """
+        try:
+            # Structure: [8, None, [["type.googleapis.com/.../UserDisplayableError", ...]]]
+            if len(error_payload) > 2 and isinstance(error_payload[2], list):
+                for entry in error_payload[2]:
+                    if isinstance(entry, list) and entry and isinstance(entry[0], str):
+                        if "UserDisplayableError" in entry[0]:
+                            raise ChatError(
+                                "Chat request was rate limited or rejected by the API. "
+                                "Wait a few seconds and try again."
+                            )
+        except ChatError:
+            raise
+        except Exception:
+            pass  # Ignore parse failures; let normal empty-answer handling proceed
 
     def _parse_citations(self, first: list) -> list[ChatReference]:
         """Parse citation details from response structure.

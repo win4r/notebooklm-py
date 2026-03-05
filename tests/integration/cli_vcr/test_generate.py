@@ -29,3 +29,20 @@ class TestGenerateCommands:
         with notebooklm_vcr.use_cassette(cassette):
             result = runner.invoke(cli, ["generate", command, *extra_args])
             assert_command_success(result)
+
+    def test_revise_slide(self, runner, mock_auth_for_vcr, mock_context):
+        """revise-slide command sends REVISE_SLIDE RPC with correct args."""
+        with notebooklm_vcr.use_cassette("artifacts_revise_slide.yaml"):
+            result = runner.invoke(
+                cli,
+                [
+                    "generate",
+                    "revise-slide",
+                    "Move the title up",
+                    "--artifact",
+                    "artifact_456",
+                    "--slide",
+                    "0",
+                ],
+            )
+            assert_command_success(result)

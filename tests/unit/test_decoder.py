@@ -406,6 +406,74 @@ class TestRPCError:
         assert error.found_ids == []
 
 
+class TestIssue114Reproduction:
+    """Reproduce Issue #114: GET_NOTEBOOK 'No result found' scenarios.
+
+    The user reported `notebooklm use` and `notebooklm ask` fail with
+    'No result found for RPC ID: rLM1Ne' while `notebooklm list` works.
+    These tests prove each distinct server response scenario that can
+    trigger this error, and verify improved diagnostic messages.
+    """
+
+    RPC_ID = RPCMethod.GET_NOTEBOOK.value
+
+    def _build_raw(self, body: str) -> str:
+        """Wrap body in anti-XSSI prefix."""
+        return f")]}}'\n{body}"
+
+    # Scenario A: Empty response — no chunks at all
+    def test_scenario_a_empty_response(self):
+        """Empty response body after anti-XSSI prefix."""
+        raw = self._build_raw("")
+        with pytest.raises(RPCError, match="response contained no RPC data — 0 chunks parsed"):
+            decode_response(raw, self.RPC_ID)
+
+    # Scenario B: Non-RPC JSON — chunks exist but no wrb.fr/er items
+    def test_scenario_b_non_rpc_json(self):
+        """Response has JSON chunks but none contain RPC data."""
+        chunk = json.dumps({"error": "something"})
+        body = f"{len(chunk)}\n{chunk}\n"
+        raw = self._build_raw(body)
+        with pytest.raises(RPCError, match="response contained no RPC data — 1 chunks parsed"):
+            decode_response(raw, self.RPC_ID)
+
+    # Scenario C: Null result data — wrb.fr found with matching ID but result is None
+    def test_scenario_c_null_result_data(self):
+        """wrb.fr item has matching RPC ID but null result data."""
+        chunk = json.dumps(["wrb.fr", self.RPC_ID, None, None, None, None])
+        body = f"{len(chunk)}\n{chunk}\n"
+        raw = self._build_raw(body)
+        with pytest.raises(RPCError, match="returned null result data"):
+            decode_response(raw, self.RPC_ID)
+
+    # Scenario D: Short item (2 elements) — wrb.fr found but skipped by extract_rpc_result
+    def test_scenario_d_short_item(self):
+        """wrb.fr item has only 2 elements, skipped by extract_rpc_result."""
+        chunk = json.dumps(["wrb.fr", self.RPC_ID])
+        body = f"{len(chunk)}\n{chunk}\n"
+        raw = self._build_raw(body)
+        # Short items are skipped by extract_rpc_result (len < 3),
+        # but collect_rpc_ids still finds the ID (len >= 2)
+        with pytest.raises(RPCError, match="returned null result data"):
+            decode_response(raw, self.RPC_ID)
+
+    def test_all_scenarios_include_method_id(self):
+        """All failure scenarios set method_id on the exception."""
+        raw_empty = self._build_raw("")
+        with pytest.raises(RPCError) as exc_info:
+            decode_response(raw_empty, self.RPC_ID)
+        assert exc_info.value.method_id == self.RPC_ID
+
+    def test_null_result_includes_found_ids(self):
+        """Null result scenario includes found_ids for debugging."""
+        chunk = json.dumps(["wrb.fr", self.RPC_ID, None, None, None, None])
+        body = f"{len(chunk)}\n{chunk}\n"
+        raw = self._build_raw(body)
+        with pytest.raises(RPCError) as exc_info:
+            decode_response(raw, self.RPC_ID)
+        assert self.RPC_ID in exc_info.value.found_ids
+
+
 class TestAuthError:
     def test_auth_error_is_rpc_error_subclass(self):
         """AuthError should be a subclass of RPCError for backwards compatibility."""

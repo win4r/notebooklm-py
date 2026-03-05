@@ -5,8 +5,9 @@ This script makes minimal API calls to exercise RPC methods and verify
 that the method IDs in rpc/types.py still match what the API returns.
 
 Exit codes:
-    0 - All RPC methods OK
+    0 - All RPC methods OK (or transient errors only)
     1 - One or more RPC methods have mismatched IDs
+    2 - Authentication or infrastructure failure (not an RPC problem)
 
 Environment variables:
     NOTEBOOKLM_AUTH_JSON - Playwright storage state JSON (required)
@@ -191,10 +192,10 @@ def load_auth() -> dict[str, str]:
             "Set NOTEBOOKLM_AUTH_JSON env var or run 'notebooklm login'",
             file=sys.stderr,
         )
-        sys.exit(1)
+        sys.exit(2)
     except ValueError as e:
         print(f"ERROR: Invalid authentication: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     return cookies
 
 
@@ -433,11 +434,15 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
 
     # Methods that take [[notebook_id]] as the only param
     if method in (
-        RPCMethod.GET_CONVERSATION_HISTORY,
+        RPCMethod.LIST_CONVERSATIONS,
         RPCMethod.GET_NOTES_AND_MIND_MAPS,
         RPCMethod.DISCOVER_SOURCES,
     ):
         return [[notebook_id]]
+
+    # GET_CONVERSATION_TURNS: placeholder conv ID - API echoes RPC ID even in error response
+    if method == RPCMethod.GET_CONVERSATION_TURNS:
+        return [[], None, None, "placeholder_conv_id", 2]
 
     # LIST_ARTIFACTS has special params
     if method == RPCMethod.LIST_ARTIFACTS:
@@ -470,6 +475,11 @@ def get_test_params(method: RPCMethod, notebook_id: str | None) -> list[Any] | N
 
     if method == RPCMethod.EXPORT_ARTIFACT:
         return [[notebook_id], "placeholder", 1]
+
+    if method == RPCMethod.REVISE_SLIDE:
+        # Params: [[2], artifact_id, [[[slide_index, prompt]]]]
+        # Will fail with placeholder artifact_id but still echoes method ID in error response
+        return [[2], "placeholder_artifact_id", [[[0, "RPC health check test"]]]]
 
     # Research operations (read-only - poll/import only)
     if method == RPCMethod.POLL_RESEARCH:
@@ -887,10 +897,10 @@ async def run_health_check(full_mode: bool = False) -> list[CheckResult]:
         csrf_token, session_id = await fetch_tokens(cookies)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     except httpx.HTTPError as e:
         print(f"ERROR: Network error while fetching auth tokens: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     auth = AuthTokens(cookies=cookies, csrf_token=csrf_token, session_id=session_id)
     print(f"Auth OK (CSRF token length: {len(auth.csrf_token)})")
     print()

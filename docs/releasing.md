@@ -1,7 +1,7 @@
 # Release Checklist
 
 **Status:** Active
-**Last Updated:** 2026-01-21
+**Last Updated:** 2026-03-02
 
 Checklist for releasing a new version of `notebooklm-py`.
 
@@ -78,6 +78,7 @@ Proceed with release preparation?
 
 | Doc | Update when... |
 |-----|----------------|
+| [README.md](../README.md) | New features, changed capabilities, Beyond the Web UI section |
 | [SKILL.md](../src/notebooklm/data/SKILL.md) | New CLI commands, changed flags, new workflows |
 | [cli-reference.md](cli-reference.md) | Any CLI changes |
 | [python-api.md](python-api.md) | New/changed Python API |

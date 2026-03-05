@@ -16,15 +16,22 @@ Also supports downloading by artifact UUID:
 """
 
 import json
+from collections.abc import Callable, Coroutine
+from functools import partial
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 import click
 
 from ..auth import AuthTokens, fetch_tokens, load_auth_from_storage
 from ..client import NotebookLMClient
 from ..types import Artifact, ArtifactType
-from .download_helpers import ArtifactDict, artifact_title_to_filename, select_artifact
+from .download_helpers import (
+    ArtifactDict,
+    artifact_title_to_filename,
+    resolve_partial_artifact_id,
+    select_artifact,
+)
 from .helpers import (
     console,
     handle_error,
@@ -207,6 +214,7 @@ async def _download_artifacts_generic(
     dry_run: bool,
     force: bool,
     no_clobber: bool,
+    slide_format: str = "pdf",
 ) -> dict:
     """
     Generic artifact download implementation.
@@ -231,10 +239,14 @@ async def _download_artifacts_generic(
         dry_run: Preview without downloading
         force: Overwrite existing files
         no_clobber: Skip if file exists
+        slide_format: Slide deck format ("pdf" or "pptx"), only for slide-deck type
 
     Returns:
         Result dictionary with operation details
     """
+    # Adjust extension for PPTX format
+    if artifact_type_name == "slide-deck" and slide_format == "pptx":
+        file_extension = ".pptx"
     # Validate conflicting flags
     if force and no_clobber:
         raise click.UsageError("Cannot specify both --force and --no-clobber")
@@ -261,9 +273,15 @@ async def _download_artifacts_generic(
                 "mind-map": client.artifacts.download_mind_map,
                 "data-table": client.artifacts.download_data_table,
             }
-            download_fn = download_methods.get(artifact_type_name)
-            if not download_fn:
+            raw_fn = download_methods.get(artifact_type_name)
+            if not raw_fn:
                 raise ValueError(f"Unknown artifact type: {artifact_type_name}")
+
+            # For slide-deck with PPTX format, bind output_format
+            _DownloadFn = Callable[..., Coroutine[Any, Any, str]]
+            download_fn: _DownloadFn = cast(_DownloadFn, raw_fn)
+            if artifact_type_name == "slide-deck" and slide_format == "pptx":
+                download_fn = partial(cast(_DownloadFn, raw_fn), output_format="pptx")
 
             # Fetch artifacts
             all_artifacts = await client.artifacts.list(nb_id_resolved)
@@ -413,6 +431,13 @@ async def _download_artifacts_generic(
                     "results": results,
                 }
 
+            # Resolve partial artifact IDs
+            resolved_artifact_id = artifact_id
+            if resolved_artifact_id:
+                resolved_artifact_id = resolve_partial_artifact_id(
+                    type_artifacts, resolved_artifact_id
+                )
+
             # Single artifact selection
             try:
                 selected, reason = select_artifact(
@@ -420,7 +445,7 @@ async def _download_artifacts_generic(
                     latest=latest,
                     earliest=earliest,
                     name=name,
-                    artifact_id=artifact_id,
+                    artifact_id=resolved_artifact_id,
                 )
             except ValueError as e:
                 return {"error": str(e)}
@@ -896,6 +921,17 @@ def _register_download_commands():
         # Apply options in reverse order (decorators are applied bottom-up)
         for opt in reversed(STANDARD_DOWNLOAD_OPTIONS):
             cmd = opt(cmd)
+
+        # Add type-specific options
+        if artifact_type == "slide-deck":
+            cmd = click.option(
+                "--format",
+                "slide_format",
+                type=click.Choice(["pdf", "pptx"]),
+                default="pdf",
+                help="Download format: pdf (default) or pptx",
+            )(cmd)
+
         cmd = click.pass_context(cmd)
 
         # Register with the download group

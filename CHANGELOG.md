@@ -25,6 +25,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 See [Migration Guide](docs/stability.md#migrating-from-v03x-to-v040) for upgrade instructions.
 
+## [0.3.3] - 2026-03-03
+
+### Added
+- **`ask --save-as-note`** - Save chat answers as notebook notes directly from the CLI (#135)
+  - `notebooklm ask "question" --save-as-note` - Save response as a note
+  - `notebooklm ask "question" --save-as-note --note-title "Title"` - Save with custom title
+- **`history --save`** - Save full conversation history as a notebook note (#135)
+  - `notebooklm history --save` - Save history with default title
+  - `notebooklm history --save --note-title "Title"` - Save with custom title
+  - `notebooklm history --show-all` - Show full Q&A content instead of preview
+- **`generate report --append`** - Append custom instructions to built-in report format templates (#134)
+  - Works with `briefing-doc`, `study-guide`, and `blog-post` formats (no effect on `custom`)
+  - Example: `notebooklm generate report --format study-guide --append "Target audience: beginners"`
+- **`generate revise-slide`** - Revise individual slides in an existing slide deck (#129)
+  - `notebooklm generate revise-slide "prompt" --artifact <id> --slide 0`
+- **PPTX download for slide decks** - Download slide decks as editable PowerPoint files (#129)
+  - `notebooklm download slide-deck --format pptx` (web UI only offers PDF)
+
+### Fixed
+- **Partial artifact ID in download commands** - Download commands now support partial artifact IDs (#130)
+- **Chat empty answer** - Fixed `ask` returning empty answer when API response marker changes (#123)
+- **X.com/Twitter content parsing** - Fixed parsing of X.com/Twitter source content (#119)
+- **Language sync on login** - Syncs server language setting to local config after `notebooklm login` (#124)
+- **Python version check** - Added runtime check with clear error message for Python < 3.10 (#125)
+- **RPC error diagnostics** - Improved error reporting for GET_NOTEBOOK and auth health check failures (#126, #127)
+- **Conversation persistence** - Chat conversations now persist server-side; conversation ID shown in `history` output (#138)
+- **History Q&A previews** - Fixed populating Q&A previews using conversation turns API (#136)
+- **`generate report --language`** - Fixed missing `--language` option for report generation (#109)
+
+### Changed
+- **Chat history API** - Simplified history retrieval; removed `exchange_id`, improved conversation grouping with parallel fetching (#140, #141)
+- **Conversation ID tracking** - Server-side conversation lookup via new `hPTbtc` RPC (`GET_LAST_CONVERSATION_ID`) replaces local exchange ID tracking
+- **History Q&A population** - Now uses `khqZz` RPC (`GET_CONVERSATION_TURNS`) to fetch full Q&A turns with accurate previews (#136)
+
+### Infrastructure
+- Bumped `actions/upload-artifact` from v6 to v7 (#131)
+
 ## [0.3.2] - 2026-01-26
 
 ### Fixed
@@ -301,7 +338,8 @@ This is the initial public release of `notebooklm-py`. While core functionality 
 - **Authentication expiry**: CSRF tokens expire after some time. Re-run `notebooklm login` if you encounter auth errors.
 - **Large file uploads**: Files over 50MB may fail or timeout. Split large documents if needed.
 
-[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/teng-lin/notebooklm-py/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/teng-lin/notebooklm-py/compare/v0.2.1...v0.3.0

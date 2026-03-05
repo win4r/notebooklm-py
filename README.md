@@ -58,7 +58,7 @@
 |------|---------|-----------------|
 | **Audio Overview** | 4 formats (deep-dive, brief, critique, debate), 3 lengths, 50+ languages | MP3/MP4 |
 | **Video Overview** | 2 formats, 9 visual styles (classic, whiteboard, kawaii, anime, etc.) | MP4 |
-| **Slide Deck** | Detailed or presenter format, adjustable length | PDF |
+| **Slide Deck** | Detailed or presenter format, adjustable length; individual slide revision | PDF, PPTX |
 | **Infographic** | 3 orientations, 3 detail levels | PNG |
 | **Quiz** | Configurable quantity and difficulty | JSON, Markdown, HTML |
 | **Flashcards** | Configurable quantity and difficulty | JSON, Markdown, HTML |
@@ -74,6 +74,10 @@ These features are available via API/CLI but not exposed in NotebookLM's web int
 - **Quiz/Flashcard export** - Get structured JSON, Markdown, or HTML (web UI only shows interactive view)
 - **Mind map data extraction** - Export hierarchical JSON for visualization tools
 - **Data table CSV export** - Download structured tables as spreadsheets
+- **Slide deck as PPTX** - Download editable PowerPoint files (web UI only offers PDF)
+- **Slide revision** - Modify individual slides with natural-language prompts
+- **Report template customization** - Append extra instructions to built-in format templates
+- **Save chat to notes** - Save Q&A answers or conversation history as notebook notes
 - **Source fulltext access** - Retrieve the indexed text content of any source
 - **Programmatic sharing** - Manage permissions without the UI
 

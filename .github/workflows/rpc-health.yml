@@ -45,7 +45,10 @@ jobs:
         NOTEBOOKLM_GENERATION_NOTEBOOK_ID: ${{ secrets.NOTEBOOKLM_GENERATION_NOTEBOOK_ID }}
       run: |
         set -o pipefail
-        python scripts/check_rpc_health.py --full | tee health-report.txt
+        python scripts/check_rpc_health.py --full 2>&1 | tee health-report.txt
+        exit_code=${PIPESTATUS[0]}
+        echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+        exit $exit_code
 
     - name: Add Summary
       if: always()
@@ -54,17 +57,25 @@ jobs:
         echo "## RPC Health Check Results" >> $GITHUB_STEP_SUMMARY
         grep -A 10 "^SUMMARY$" health-report.txt >> $GITHUB_STEP_SUMMARY || echo "No summary found" >> $GITHUB_STEP_SUMMARY
 
-    - name: Create Issue on Failure
-      if: steps.health.outcome == 'failure'
+    - name: Create Issue on RPC Mismatch
+      if: steps.health.outputs.exit_code == '1'
       uses: peter-evans/create-issue-from-file@v6
       with:
         title: "RPC ID Mismatch Detected"
         content-filepath: health-report.txt
         labels: bug, rpc-breakage, automated
 
+    - name: Create Issue on Auth Failure
+      if: steps.health.outputs.exit_code == '2'
+      uses: peter-evans/create-issue-from-file@v6
+      with:
+        title: "RPC Health Check: Authentication Failure"
+        content-filepath: health-report.txt
+        labels: bug, automated
+
     - name: Upload Report
       if: always()
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: rpc-health-report
         path: health-report.txt
@@ -73,5 +84,5 @@ jobs:
     - name: Fail if health check failed
       if: steps.health.outcome == 'failure'
       run: |
-        echo "RPC Health Check failed. See report above."
+        echo "RPC Health Check failed (exit code: ${{ steps.health.outputs.exit_code }}). See report above."
         exit 1

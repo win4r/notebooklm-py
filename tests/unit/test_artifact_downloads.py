@@ -401,7 +401,7 @@ class TestDownloadUrl:
                 ),
             ):
                 result = await api._downloader._download_url(
-                    "https://other.example.com/file.mp4", output_path
+                    "https://storage.googleapis.com/file.mp4", output_path
                 )
 
             assert result == output_path

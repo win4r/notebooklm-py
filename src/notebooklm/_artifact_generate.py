@@ -194,6 +194,7 @@ class ArtifactGenerator:
         source_ids: builtins.list[str] | None = None,
         language: str = "en",
         custom_prompt: str | None = None,
+        extra_instructions: str | None = None,
     ) -> GenerationStatus:
         """Generate a report artifact.
 
@@ -203,6 +204,8 @@ class ArtifactGenerator:
             source_ids: Source IDs to include. If None, uses all sources.
             language: Language code (default: "en").
             custom_prompt: Required for CUSTOM format.
+            extra_instructions: Additional instructions appended to the built-in
+                template prompt. Ignored when report_format is CUSTOM.
 
         Returns:
             GenerationStatus with task_id for polling.
@@ -211,6 +214,8 @@ class ArtifactGenerator:
             source_ids = await self._core.get_source_ids(notebook_id)
 
         config = self._get_report_config(report_format, custom_prompt)
+        if extra_instructions and report_format != ReportFormat.CUSTOM:
+            config = {**config, "prompt": f"{config['prompt']}\n\n{extra_instructions}"}
         source_ids_triple, source_ids_double = _prepare_source_ids(source_ids)
 
         params = [

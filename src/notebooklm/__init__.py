@@ -13,6 +13,12 @@ Note:
     See docs/troubleshooting.md for guidance on handling API changes.
 """
 
+# Runtime Python version guard (must run before any PEP 604 syntax is evaluated)
+from ._version_check import check_python_version as _check_python_version  # noqa: E402
+
+_check_python_version()
+del _check_python_version
+
 # Configure logging (must run before other imports that create loggers)
 from ._logging import configure_logging
 
