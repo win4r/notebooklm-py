@@ -169,6 +169,41 @@ class TestVideoGeneration:
 
 
 @requires_auth
+class TestCinematicVideoGeneration:
+    """Cinematic video generation tests.
+
+    Cinematic videos use Veo 3 AI for documentary-style footage.
+    Requires Google AI Ultra subscription. Generation takes ~30-40 minutes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_generate_cinematic_video_default(self, client, generation_notebook_id):
+        """Test cinematic video generation with defaults."""
+        result = await client.artifacts.generate_cinematic_video(generation_notebook_id)
+        assert_generation_started(result)
+
+    @pytest.mark.asyncio
+    @pytest.mark.variants
+    async def test_generate_cinematic_video_with_instructions(self, client, generation_notebook_id):
+        """Test cinematic video generation with custom instructions."""
+        result = await client.artifacts.generate_cinematic_video(
+            generation_notebook_id,
+            instructions="Focus on key concepts for a general audience",
+        )
+        assert_generation_started(result)
+
+    @pytest.mark.asyncio
+    @pytest.mark.variants
+    async def test_generate_cinematic_video_with_language(self, client, generation_notebook_id):
+        """Test cinematic video generation with explicit language."""
+        result = await client.artifacts.generate_cinematic_video(
+            generation_notebook_id,
+            language="en",
+        )
+        assert_generation_started(result)
+
+
+@requires_auth
 class TestQuizGeneration:
     """Quiz generation tests."""
 
