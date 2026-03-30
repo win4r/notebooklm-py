@@ -2,6 +2,8 @@
 
 import re
 import urllib.parse
+import zipfile
+from io import BytesIO
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -663,10 +665,8 @@ class TestAddEpubFileSource:
         tmp_path,
     ):
         """Test EPUB file upload through the 3-step protocol."""
-        import zipfile
-        from io import BytesIO
-
-        # Create a minimal EPUB file
+        # Minimal EPUB ZIP — only needs valid ZIP structure since the server
+        # is mocked and never processes the content.
         test_epub = tmp_path / "test_book.epub"
         buffer = BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
