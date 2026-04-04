@@ -262,28 +262,46 @@ def convert_rookiepy_cookies_to_storage_state(
     Key mappings:
     - ``http_only`` → ``httpOnly`` (snake_case to camelCase)
     - ``expires=None`` → ``expires=-1`` (Playwright convention for session cookies)
-    - ``sameSite`` is absent in rookiepy; defaults to ``"None"``
+    - ``sameSite`` always ``"None"`` for cross-site Google cookies
 
     Args:
         rookiepy_cookies: List of cookie dicts from any ``rookiepy.*()`` call.
+            Required keys: ``domain``, ``name``, ``value``.
 
     Returns:
         Dict matching storage_state.json schema: ``{"cookies": [...], "origins": []}``.
+
+    Raises:
+        ValueError: If a cookie is missing required fields (name, value, domain).
     """
     converted = []
     for cookie in rookiepy_cookies:
         domain = cookie.get("domain", "")
+        name = cookie.get("name", "")
+        value = cookie.get("value", "")
+
+        # Validate required fields
+        if not name or not value or not domain:
+            continue
+
         if not _is_allowed_auth_domain(domain):
             continue
+
+        # Cache dict lookups to reduce hash table operations
+        path = cookie.get("path", "/")
+        http_only = cookie.get("http_only", False)
+        secure = cookie.get("secure", False)
+        expires = cookie.get("expires")
+
         converted.append(
             {
-                "name": cookie.get("name", ""),
-                "value": cookie.get("value", ""),
+                "name": name,
+                "value": value,
                 "domain": domain,
-                "path": cookie.get("path", "/"),
-                "expires": cookie["expires"] if cookie.get("expires") is not None else -1,
-                "httpOnly": bool(cookie.get("http_only", False)),
-                "secure": bool(cookie.get("secure", False)),
+                "path": path,
+                "expires": expires if expires is not None else -1,
+                "httpOnly": http_only,
+                "secure": secure,
                 "sameSite": "None",
             }
         )
