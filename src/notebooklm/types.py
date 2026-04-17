@@ -244,6 +244,39 @@ def _map_artifact_kind(artifact_type: int, variant: int | None) -> ArtifactType:
     return result
 
 
+def _extract_source_url(metadata: Any, *, allow_bare_http: bool = True) -> str | None:
+    """Extract a source URL from a ``src[2]`` metadata array.
+
+    NotebookLM stores source URLs at different indices of the metadata array
+    depending on the source type:
+
+    - ``metadata[7]`` → ``[url]`` for web page / PDF sources
+    - ``metadata[5]`` → ``[url, video_id, channel_name]`` for YouTube sources
+    - ``metadata[0]`` → bare URL string for some older/alternate shapes
+
+    Precedence is ``[7] > [5] > [0]``. The ``[0]`` fallback is gated by
+    ``allow_bare_http`` because medium-nested ``from_api_response`` shapes
+    don't support it (``metadata[0]`` can pack unrelated data there).
+    Returns ``None`` if ``metadata`` is not a list or no probe matches.
+    """
+    if not isinstance(metadata, list):
+        return None
+    url: str | None = None
+    if len(metadata) > 7:
+        url_list = metadata[7]
+        if isinstance(url_list, list) and len(url_list) > 0:
+            url = url_list[0]
+    if not url and len(metadata) > 5:
+        yt_data = metadata[5]
+        if isinstance(yt_data, list) and len(yt_data) > 0 and isinstance(yt_data[0], str):
+            url = yt_data[0]
+    if not url and allow_bare_http and len(metadata) > 0:
+        candidate = metadata[0]
+        if isinstance(candidate, str) and candidate.startswith("http"):
+            url = candidate
+    return url
+
+
 __all__ = [
     # Dataclasses
     "Notebook",
@@ -582,60 +615,31 @@ class Source:
                     source_id = entry[0][0] if isinstance(entry[0], list) else entry[0]
                     title = entry[1] if len(entry) > 1 else None
 
-                    # Try to extract URL if present. See _sources.py list() for
-                    # the full index map; YouTube URLs live at entry[2][5][0].
-                    url = None
-                    if len(entry) > 2 and isinstance(entry[2], list):
-                        if len(entry[2]) > 7:
-                            url_list = entry[2][7]
-                            if isinstance(url_list, list) and len(url_list) > 0:
-                                url = url_list[0]
-                        if not url and len(entry[2]) > 5:
-                            yt_data = entry[2][5]
-                            if (
-                                isinstance(yt_data, list)
-                                and len(yt_data) > 0
-                                and isinstance(yt_data[0], str)
-                            ):
-                                url = yt_data[0]
-
-                    # Also parse the type code here so youtube sources are
-                    # identified correctly even in the medium-nested shape.
-                    type_code = None
-                    if (
-                        len(entry) > 2
-                        and isinstance(entry[2], list)
-                        and len(entry[2]) > 4
-                        and isinstance(entry[2][4], int)
-                    ):
-                        type_code = entry[2][4]
+                    # Extract URL and type code from entry[2] via the shared
+                    # helper. Medium-nested shapes don't support the bare-http
+                    # [0] fallback, so precedence is restricted to [7] > [5].
+                    metadata = entry[2] if len(entry) > 2 and isinstance(entry[2], list) else None
+                    url = _extract_source_url(metadata, allow_bare_http=False)
+                    type_code = (
+                        metadata[4]
+                        if metadata is not None
+                        and len(metadata) > 4
+                        and isinstance(metadata[4], int)
+                        else None
+                    )
 
                     return cls(id=str(source_id), title=title, url=url, _type_code=type_code)
 
-                # Deeply nested: continue with URL and type code extraction.
-                # See _sources.py list() for the full index map; YouTube URLs
-                # live at entry[2][5][0].
-                url = None
-                type_code = None
-                if len(entry) > 2 and isinstance(entry[2], list):
-                    if len(entry[2]) > 7:
-                        url_list = entry[2][7]
-                        if isinstance(url_list, list) and len(url_list) > 0:
-                            url = url_list[0]
-                    if not url and len(entry[2]) > 5:
-                        yt_data = entry[2][5]
-                        if (
-                            isinstance(yt_data, list)
-                            and len(yt_data) > 0
-                            and isinstance(yt_data[0], str)
-                        ):
-                            url = yt_data[0]
-                    if not url and len(entry[2]) > 0:
-                        if isinstance(entry[2][0], str) and entry[2][0].startswith("http"):
-                            url = entry[2][0]
-                    # Extract type code at entry[2][4] if available
-                    if len(entry[2]) > 4 and isinstance(entry[2][4], int):
-                        type_code = entry[2][4]
+                # Deeply-nested shape: extract URL (via shared helper) and
+                # type code from entry[2] if present. Full precedence applies:
+                # [7] > [5] > bare-http at [0].
+                metadata = entry[2] if len(entry) > 2 and isinstance(entry[2], list) else None
+                url = _extract_source_url(metadata)
+                type_code = (
+                    metadata[4]
+                    if metadata is not None and len(metadata) > 4 and isinstance(metadata[4], int)
+                    else None
+                )
 
                 return cls(
                     id=str(source_id),
