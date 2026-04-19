@@ -273,6 +273,61 @@ class TestSourcesAPI:
         assert sources[0].url == "https://www.youtube.com/watch?v=dcWU-qD8ISQ"
 
     @pytest.mark.asyncio
+    async def test_list_sources_ignores_bare_http_at_index_0(
+        self,
+        auth_tokens,
+        httpx_mock: HTTPXMock,
+        build_rpc_response,
+    ):
+        """metadata[0] must not be used as a URL fallback in list().
+
+        GET_NOTEBOOK source entries use the same medium-nested shape that
+        Source.from_api_response handles with allow_bare_http=False —
+        metadata[0] in that shape can pack unrelated http-like data. If the
+        bare-[0] fallback fires, list() would surface a bogus URL. Keep
+        allow_bare_http=False here so list() and from_api_response agree.
+        """
+        response = build_rpc_response(
+            RPCMethod.GET_NOTEBOOK,
+            [
+                [
+                    "Test Notebook",
+                    [
+                        [
+                            ["src_bare"],
+                            "Source with bare http at [0]",
+                            [
+                                # metadata[0] is an http-like string that must
+                                # be ignored — it is not a source URL here.
+                                "http://unrelated.example.com/not-a-source-url",
+                                11,
+                                [1704240000, 0],
+                                None,
+                                5,
+                                None,
+                                None,
+                                None,  # metadata[7] empty → no web-page URL
+                            ],
+                            [None, 2],
+                        ],
+                    ],
+                    "nb_123",
+                    "📘",
+                    None,
+                    [None, None, None, None, None, [1704067200, 0]],
+                ]
+            ],
+        )
+        httpx_mock.add_response(content=response.encode())
+
+        async with NotebookLMClient(auth_tokens) as client:
+            sources = await client.sources.list("nb_123")
+
+        assert len(sources) == 1
+        assert sources[0].id == "src_bare"
+        assert sources[0].url is None
+
+    @pytest.mark.asyncio
     async def test_list_sources_index_7_wins_over_5(
         self,
         auth_tokens,

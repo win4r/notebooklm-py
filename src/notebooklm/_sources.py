@@ -103,9 +103,13 @@ class SourcesAPI:
                 src_id = src[0][0] if isinstance(src[0], list) else src[0]
                 title = src[1] if len(src) > 1 else None
 
-                # Extract URL via the shared helper. See types._extract_source_url
-                # for the probe order ([7] > [5] > bare http at [0]).
-                url = _extract_source_url(src[2] if len(src) > 2 else None)
+                # Extract URL via the shared helper. GET_NOTEBOOK source entries
+                # use the same medium-nested metadata shape that
+                # Source.from_api_response handles with allow_bare_http=False —
+                # metadata[0] in that shape can pack unrelated data. Keep the
+                # two call sites consistent by disabling the bare-http fallback
+                # here too. Probe order is [7] > [5].
+                url = _extract_source_url(src[2] if len(src) > 2 else None, allow_bare_http=False)
 
                 # Extract timestamp from src[2][2] - [seconds, nanoseconds]
                 created_at = None
