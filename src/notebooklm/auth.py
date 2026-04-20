@@ -31,6 +31,8 @@ import json
 import logging
 import os
 import re
+import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -642,22 +644,55 @@ def load_httpx_cookies(path: Path | None = None) -> "httpx.Cookies":
     return cookies
 
 
-async def fetch_tokens(cookies: dict[str, str]) -> tuple[str, str]:
-    """Fetch CSRF token and session ID from NotebookLM homepage.
+NOTEBOOKLM_REFRESH_CMD_ENV = "NOTEBOOKLM_REFRESH_CMD"
+_REFRESH_ATTEMPTED_ENV = "_NOTEBOOKLM_REFRESH_ATTEMPTED"
+_AUTH_ERROR_SIGNALS = (
+    "authentication expired",
+    "redirected to",
+    "run 'notebooklm login'",
+)
 
-    Makes an authenticated request to NotebookLM and extracts the required
-    tokens from the page HTML.
 
-    Args:
-        cookies: Dict of Google auth cookies
+def _should_try_refresh(err: Exception) -> bool:
+    """True when an auth failure should trigger NOTEBOOKLM_REFRESH_CMD."""
+    if os.environ.get(_REFRESH_ATTEMPTED_ENV):
+        return False
+    if not os.environ.get(NOTEBOOKLM_REFRESH_CMD_ENV):
+        return False
+    msg = str(err).lower()
+    return any(sig in msg for sig in _AUTH_ERROR_SIGNALS)
 
-    Returns:
-        Tuple of (csrf_token, session_id)
+
+def _run_refresh_cmd() -> None:
+    """Run ``NOTEBOOKLM_REFRESH_CMD`` once per process to refresh stored cookies.
 
     Raises:
-        httpx.HTTPError: If request fails
-        ValueError: If tokens cannot be extracted from response
+        RuntimeError: If the refresh command is missing, times out, or exits
+            non-zero.
     """
+    cmd = os.environ.get(NOTEBOOKLM_REFRESH_CMD_ENV)
+    if not cmd:
+        raise RuntimeError(f"{NOTEBOOKLM_REFRESH_CMD_ENV} is not set; cannot refresh cookies.")
+    os.environ[_REFRESH_ATTEMPTED_ENV] = "1"
+    try:
+        result = subprocess.run(
+            shlex.split(cmd),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError) as refresh_err:
+        raise RuntimeError(
+            f"{NOTEBOOKLM_REFRESH_CMD_ENV} failed to execute: {refresh_err}"
+        ) from refresh_err
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"{NOTEBOOKLM_REFRESH_CMD_ENV} exited {result.returncode}: {stderr}")
+    logger.info("NotebookLM cookies refreshed via %s", NOTEBOOKLM_REFRESH_CMD_ENV)
+
+
+async def _fetch_tokens_once(cookies: dict[str, str]) -> tuple[str, str]:
+    """Single-shot token fetch without refresh (inner implementation)."""
     logger.debug("Fetching CSRF and session tokens from NotebookLM")
     cookie_header = "; ".join(f"{k}={v}" for k, v in cookies.items())
 
@@ -685,3 +720,50 @@ async def fetch_tokens(cookies: dict[str, str]) -> tuple[str, str]:
 
         logger.debug("Authentication tokens obtained successfully")
         return csrf, session_id
+
+
+async def fetch_tokens(cookies: dict[str, str]) -> tuple[str, str]:
+    """Fetch CSRF token and session ID from NotebookLM homepage.
+
+    Makes an authenticated request to NotebookLM and extracts the required
+    tokens from the page HTML.
+
+    Automatic refresh
+    -----------------
+    If ``NOTEBOOKLM_REFRESH_CMD`` is set and the first attempt raises a
+    ``ValueError`` matching a known auth-expiry signal, this function runs
+    the refresh command, reloads cookies from the default storage location,
+    updates ``cookies`` in place, and retries once. A process-scoped flag
+    prevents infinite refresh loops.
+
+    The refresh command is expected to rewrite the storage file at the
+    default path (typically ``~/.notebooklm/storage_state.json``). One common
+    pattern is a script that syncs Google cookies from a cookie vault such as
+    a browser extension.
+
+    Args:
+        cookies: Dict of Google auth cookies. Mutated in place on refresh.
+
+    Returns:
+        Tuple of (csrf_token, session_id)
+
+    Raises:
+        httpx.HTTPError: If request fails
+        ValueError: If tokens cannot be extracted (after optional refresh)
+        RuntimeError: If ``NOTEBOOKLM_REFRESH_CMD`` is set but fails
+    """
+    try:
+        return await _fetch_tokens_once(cookies)
+    except ValueError as err:
+        if not _should_try_refresh(err):
+            raise
+        logger.warning(
+            "NotebookLM auth failed (%s). Running %s to refresh cookies.",
+            err,
+            NOTEBOOKLM_REFRESH_CMD_ENV,
+        )
+        _run_refresh_cmd()
+        fresh = load_auth_from_storage()
+        cookies.clear()
+        cookies.update(fresh)
+        return await _fetch_tokens_once(cookies)

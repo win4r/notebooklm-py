@@ -555,6 +555,129 @@ class TestFetchTokens:
         assert "HSID=hsid_value" in cookie_header
 
 
+class TestFetchTokensAutoRefresh:
+    """Test NOTEBOOKLM_REFRESH_CMD auto-refresh behavior in fetch_tokens."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_refresh_flag(self, monkeypatch):
+        # Ensure each test starts with no prior attempt flag
+        monkeypatch.delenv("_NOTEBOOKLM_REFRESH_ATTEMPTED", raising=False)
+        monkeypatch.delenv("NOTEBOOKLM_REFRESH_CMD", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_no_refresh_when_env_unset(self, httpx_mock: HTTPXMock):
+        """Auth error propagates unchanged when NOTEBOOKLM_REFRESH_CMD is not set."""
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/",
+            status_code=302,
+            headers={"Location": "https://accounts.google.com/signin"},
+        )
+        httpx_mock.add_response(
+            url="https://accounts.google.com/signin",
+            content=b"<html>Login</html>",
+        )
+
+        with pytest.raises(ValueError, match="Authentication expired"):
+            await fetch_tokens({"SID": "stale"})
+
+    @pytest.mark.asyncio
+    async def test_refresh_retries_once_and_succeeds(
+        self, tmp_path, monkeypatch, httpx_mock: HTTPXMock
+    ):
+        """On auth failure, runs refresh cmd, reloads cookies, retries successfully."""
+        # Stage 1: write a stale cookie file
+        storage_file = tmp_path / "storage_state.json"
+        storage_file.write_text(
+            json.dumps({"cookies": [{"name": "SID", "value": "stale", "domain": ".google.com"}]})
+        )
+        monkeypatch.setattr("notebooklm.auth.get_storage_path", lambda: storage_file)
+
+        # Refresh command rewrites the file with a fresh SID
+        fresh_file = tmp_path / "fresh_cookies.json"
+        fresh_file.write_text(
+            json.dumps({"cookies": [{"name": "SID", "value": "fresh", "domain": ".google.com"}]})
+        )
+        refresh_script = tmp_path / "refresh.sh"
+        refresh_script.write_text(f"#!/usr/bin/env bash\ncp {fresh_file} {storage_file}\n")
+        refresh_script.chmod(0o755)
+        monkeypatch.setenv("NOTEBOOKLM_REFRESH_CMD", str(refresh_script))
+
+        # First HTTP call: auth redirect
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/",
+            status_code=302,
+            headers={"Location": "https://accounts.google.com/signin"},
+        )
+        httpx_mock.add_response(
+            url="https://accounts.google.com/signin",
+            content=b"<html>Login</html>",
+        )
+        # Second HTTP call (after refresh): success
+        html = '"SNlM0e":"csrf_ok" "FdrFJe":"sess_ok"'
+        httpx_mock.add_response(url="https://notebooklm.google.com/", content=html.encode())
+
+        cookies = {"SID": "stale"}
+        csrf, session_id = await fetch_tokens(cookies)
+
+        assert csrf == "csrf_ok"
+        assert session_id == "sess_ok"
+        # Cookies dict was mutated in place with fresh values
+        assert cookies["SID"] == "fresh"
+
+    @pytest.mark.asyncio
+    async def test_refresh_does_not_loop(self, tmp_path, monkeypatch, httpx_mock: HTTPXMock):
+        """If refresh fails to fix auth, second failure propagates (no infinite loop)."""
+        storage_file = tmp_path / "storage_state.json"
+        storage_file.write_text(
+            json.dumps({"cookies": [{"name": "SID", "value": "stale", "domain": ".google.com"}]})
+        )
+        monkeypatch.setattr("notebooklm.auth.get_storage_path", lambda: storage_file)
+
+        # Refresh is a no-op (still stale after)
+        refresh_script = tmp_path / "refresh.sh"
+        refresh_script.write_text("#!/usr/bin/env bash\nexit 0\n")
+        refresh_script.chmod(0o755)
+        monkeypatch.setenv("NOTEBOOKLM_REFRESH_CMD", str(refresh_script))
+
+        # Both attempts hit the same redirect
+        for _ in range(2):
+            httpx_mock.add_response(
+                url="https://notebooklm.google.com/",
+                status_code=302,
+                headers={"Location": "https://accounts.google.com/signin"},
+            )
+            httpx_mock.add_response(
+                url="https://accounts.google.com/signin",
+                content=b"<html>Login</html>",
+            )
+
+        with pytest.raises(ValueError, match="Authentication expired"):
+            await fetch_tokens({"SID": "stale"})
+
+    @pytest.mark.asyncio
+    async def test_refresh_cmd_nonzero_exit_becomes_runtime_error(
+        self, tmp_path, monkeypatch, httpx_mock: HTTPXMock
+    ):
+        """Refresh command failure surfaces as RuntimeError, not silent auth error."""
+        refresh_script = tmp_path / "refresh.sh"
+        refresh_script.write_text("#!/usr/bin/env bash\necho 'vault unavailable' >&2\nexit 1\n")
+        refresh_script.chmod(0o755)
+        monkeypatch.setenv("NOTEBOOKLM_REFRESH_CMD", str(refresh_script))
+
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/",
+            status_code=302,
+            headers={"Location": "https://accounts.google.com/signin"},
+        )
+        httpx_mock.add_response(
+            url="https://accounts.google.com/signin",
+            content=b"<html>Login</html>",
+        )
+
+        with pytest.raises(RuntimeError, match="exited 1"):
+            await fetch_tokens({"SID": "stale"})
+
+
 class TestAuthTokensFromStorage:
     """Test AuthTokens.from_storage class method."""
 
