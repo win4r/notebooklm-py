@@ -233,20 +233,39 @@ npx skills add win4r/notebooklm-py
 
 Fetches [SKILL.md](SKILL.md) directly from this fork. For the upstream canonical copy, substitute `teng-lin/notebooklm-py`.
 
-**Option 3 — Hermes Agent** (uses the [`skills/notebooklm/`](skills/notebooklm/) subdirectory layout):
+**Option 3 — Hermes Agent** (uses the [`skills/notebooklm/`](skills/notebooklm/) subdirectory layout)
+
+**Prerequisites**: Hermes Agent v0.10+ installed at the default path (`~/.hermes/hermes-agent/venv` exists), `uv` on your PATH (`brew install uv` / `pip install uv` if missing), and `~/.local/bin` on your `PATH` (already true if `which hermes` returns `~/.local/bin/hermes`).
 
 ```bash
+# 1. Register this fork as a skill source and install the skill into Hermes
 hermes skills tap add win4r/notebooklm-py
 hermes skills install win4r/notebooklm-py/skills/notebooklm --force
-```
 
-`--force` is required because Hermes's skills-guard flags the embedded `pip install` strings in SKILL.md as supply-chain signals — this is expected. See [`SECURITY_AUDIT.md`](skills/notebooklm/SECURITY_AUDIT.md) for the decision rationale and the upgrade protocol. After installing, grab the Python package into the Hermes venv:
-
-```bash
+# 2. Install the Python package into the Hermes venv (audited fork tag)
 VIRTUAL_ENV=~/.hermes/hermes-agent/venv uv pip install \
   "notebooklm-py[browser] @ git+https://github.com/win4r/notebooklm-py@v0.3.4-hermes.1"
-ln -s ~/.hermes/hermes-agent/venv/bin/notebooklm ~/.local/bin/notebooklm
+~/.hermes/hermes-agent/venv/bin/playwright install chromium
+
+# 3. Expose the CLI on PATH (same pattern as `hermes` itself uses)
+mkdir -p ~/.local/bin
+ln -sf ~/.hermes/hermes-agent/venv/bin/notebooklm ~/.local/bin/notebooklm
+
+# 4. Authenticate. If `notebooklm login` triggers Google's 48h new-device
+#    cooldown, use the browser-session import described in the next section.
+notebooklm login
+
+# 5. Verify both the skill and the CLI are working
+hermes skills list                     # should include a `notebooklm` entry
+notebooklm auth check --test           # all rows should be ✓
+notebooklm list                        # lists your NotebookLM notebooks
 ```
+
+**Why `--force`, and the main-vs-tag caveat:**
+
+- `--force` on `hermes skills install` is mandatory because Hermes's skills-guard flags the embedded `pip install` strings in SKILL.md as supply-chain signals. This is expected; see [`SECURITY_AUDIT.md`](skills/notebooklm/SECURITY_AUDIT.md) for the decision rationale and the upgrade protocol.
+- Hermes's GitHub skill fetcher always pulls from the fork's `main` branch — there is no `--ref`/`--tag` flag ([`tools/skills_hub.py:483`](https://github.com/NousResearch/hermes-agent/blob/main/tools/skills_hub.py#L483) in upstream Hermes). This fork holds an invariant: **`main` always matches the latest audited tag** (currently `v0.3.4-hermes.1`). Before installing, check [compare view](https://github.com/win4r/notebooklm-py/compare/v0.3.4-hermes.1...main) — if `main` shows unreleased commits, wait for a re-tag before trusting the install.
+- The Python package install in step 2 *is* tag-pinned via `git+...@v0.3.4-hermes.1`, so the pip path stays audit-respecting regardless of main drift.
 
 
 ## Importing Authentication from an Existing Browser
