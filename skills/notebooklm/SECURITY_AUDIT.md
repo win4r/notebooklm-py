@@ -1,8 +1,9 @@
 # notebooklm-py Security Audit
 
-**Audit version:** `v0.3.4-hermes.3` (Python package version stays `0.3.4`)
-**Audit date:** 2026-04-23 (original scan at `v0.3.4-hermes.2`; `hermes.3` is a docs-only follow-up on top of `hermes.2` with `src/` unchanged — audit findings carry forward verbatim)
+**Audit version:** `v0.3.4-hermes.4` (Python package version stays `0.3.4`)
+**Audit date:** 2026-04-23 (original scan at `v0.3.4-hermes.2`; `hermes.3` and `hermes.4` are docs/skill-content follow-ups with `src/` unchanged — audit findings carry forward verbatim)
 **Prior audits:**
+- `v0.3.4-hermes.3` (2026-04-23) — docs-only bump to restore `main == tag` invariant after Option 3 recipe clarifications. `src/` unchanged from hermes.2.
 - `v0.3.4-hermes.2` (2026-04-23) — re-scan after merging upstream post-v0.3.4 delta + cherry-picking PR #298, #279. LOW RISK.
 - `v0.3.4-hermes.1` (2026-04-23 earlier) — initial scan. LOW RISK, `src/` byte-identical to upstream tag `v0.3.4`.
 **Auditor:** Claude (manual static scan)
@@ -69,7 +70,7 @@ Diff statistics vs upstream `v0.3.4` tag: **21 files changed, +2389/-847 lines**
 ## Hardening still recommended (NOT YET APPLIED)
 
 - Use a burner Google account for auth, not the primary account.
-- Pin to exact tag: the install commands in README reference `v0.3.4-hermes.3`.
+- Pin to exact tag: the install commands in README reference `v0.3.4-hermes.4`.
 - `chmod 600 ~/.notebooklm/storage_state.json` after any re-login (Playwright may restore 644 defaults).
 - Before any upgrade, diff versions: see "Upgrade protocol" below.
 

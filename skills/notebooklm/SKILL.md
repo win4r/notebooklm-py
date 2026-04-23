@@ -197,7 +197,7 @@ Before starting workflows, verify the CLI is ready:
 
 **Parallel safety:** Use explicit notebook IDs in parallel workflows. Commands supporting `-n` shorthand: `artifact wait`, `source wait`, `research wait/status`, `download *`. Download commands also support `-a/--artifact`. Other commands use `--notebook`. For chat, use `-c <conversation_id>` to target a specific conversation.
 
-**Partial IDs:** Use first 6+ characters of UUIDs. Must be unique prefix (fails if ambiguous). Works for ID-based commands such as `use`, `source delete`, and `wait`. For exact source-title deletion, use `source delete-by-title "Title"`. For automation, prefer full UUIDs to avoid ambiguity.
+**Partial IDs:** For notebook IDs, **always use full UUIDs** — partial IDs are rejected by Google's RPC even when unique. Extract full ID via `notebooklm list --json | python3 -c "import sys,json; ..."`. Partial IDs work reliably only for `source delete` and `source wait`.
 
 ## Command Output Formats
 
@@ -463,7 +463,8 @@ notebooklm artifact list --json
 | Auth/cookie error | Session expired | Run `notebooklm auth check` then `notebooklm login` |
 | "No notebook context" | Context not set | Use `-n <id>` or `--notebook <id>` flag (parallel), or `notebooklm use <id>` (single-agent) |
 | "No result found for RPC ID" | Rate limiting | Wait 5-10 min, retry |
-| `GENERATION_FAILED` | Google rate limit | Wait and retry later |
+| "RPC GET_NOTEBOOK failed...null result data" | Partial ID ambiguous or rejected | Extract **full UUID** via `notebooklm list --json` and use that instead |
+| Partial ID `use` fails silently (no error, context not set) | Google RPC rejects partial notebook IDs | Always use full UUID — extract with `notebooklm list --json \| python3 -c "import sys,json; ..."` |
 | Download fails | Generation incomplete | Check `artifact list` for status |
 | Invalid notebook/source ID | Wrong ID | Run `notebooklm list` to verify |
 | RPC protocol error | Google changed APIs | May need CLI update |
