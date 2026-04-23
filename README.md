@@ -220,6 +220,72 @@ npx skills add teng-lin/notebooklm-py
 Fetches the canonical [SKILL.md](SKILL.md) directly from GitHub.
 
 
+## Importing Authentication from an Existing Browser
+
+`notebooklm login` spawns a fresh Playwright Chromium, which Google treats as a
+new device. After repeated fresh logins, Google may block new-device sign-in
+for ~48 hours. If you are already signed into NotebookLM in your main browser,
+you can reuse that session directly — no cooldown, no Playwright login flow.
+
+Your existing browser is an already-trusted device, so its session cookies work
+immediately when copied into the `storage_state.json` that this library reads.
+
+### Steps
+
+1. **Install a cookie-export extension** in your main browser:
+   - Chrome / Edge / Brave / Arc: **[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)** — open source, explicit "no network access" manifest
+   - Firefox: **"cookies.txt"** by Lennon Hill
+
+2. **Open <https://notebooklm.google.com>** and confirm the avatar in the top
+   right is the Google account you want to use.
+
+3. **Export cookies as JSON** via the extension:
+   - In *Get cookies.txt LOCALLY*: click the extension icon → set **Export Format: JSON** → **Export As → JSON** → save anywhere (e.g. `/tmp/nb_cookies.json`).
+   - The extension captures every cookie sent to `notebooklm.google.com`,
+     including `HttpOnly` cookies such as `SID` that JavaScript cannot read.
+
+4. **Convert to `storage_state.json`** using the helper script in this repo:
+
+   ```bash
+   python3 skills/notebooklm/import_browser_cookies.py /tmp/nb_cookies.json
+   ```
+
+   The script:
+   - keeps only Google-domain cookies (drops everything else),
+   - requires a session anchor (`SID`, `__Secure-1PSID`, or `__Secure-3PSID`),
+   - writes `~/.notebooklm/storage_state.json` and `chmod 600` it.
+
+   Override the output path with `--out PATH` or preview with `--dry-run`.
+
+5. **Verify the session works**:
+
+   ```bash
+   notebooklm auth check --test   # All rows should be ✓, including "Token fetch"
+   notebooklm list                # Should list your notebooks
+   ```
+
+6. **Delete the exported JSON immediately** — it contains live Google session
+   credentials:
+
+   ```bash
+   rm /tmp/nb_cookies.json
+   ```
+
+### Security notes
+
+- `~/.notebooklm/storage_state.json` contains your Google `SID` cookie. Treat
+  it like a password — any process with read access can impersonate you on
+  every cookie-authenticated Google service (Gmail, Drive, YouTube, etc.).
+- This repo's `.gitignore` already excludes `.notebooklm/`, `storage_state.json`,
+  and `*cookies*.json` to prevent accidental commits, but you should still
+  audit before pushing.
+- Cookies eventually expire (typically several months). When `notebooklm auth
+  check` starts failing, repeat this procedure — the browser remains a trusted
+  device so no 48-hour cooldown is triggered.
+- For higher-risk automation, consider using a dedicated Google account with
+  no access to sensitive services, rather than your primary account.
+
+
 ## Documentation
 
 - **[CLI Reference](docs/cli-reference.md)** - Complete command documentation
