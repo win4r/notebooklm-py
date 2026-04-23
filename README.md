@@ -242,24 +242,34 @@ Fetches [SKILL.md](SKILL.md) directly from this fork. For the upstream canonical
 hermes skills tap add win4r/notebooklm-py
 hermes skills install win4r/notebooklm-py/skills/notebooklm --force
 
-# 2. Install the Python package into the Hermes venv (audited fork tag)
+# 2. Install the Python package into the Hermes venv (audited fork tag).
+#    [browser,cookies] pulls in both Playwright and rookiepy — the cookies extra
+#    is what makes --browser-cookies / auto-refresh possible.
 VIRTUAL_ENV=~/.hermes/hermes-agent/venv uv pip install \
-  "notebooklm-py[browser] @ git+https://github.com/win4r/notebooklm-py@v0.3.4-hermes.2"
+  "notebooklm-py[browser,cookies] @ git+https://github.com/win4r/notebooklm-py@v0.3.4-hermes.2"
 ~/.hermes/hermes-agent/venv/bin/playwright install chromium
 
 # 3. Expose the CLI on PATH (same pattern as `hermes` itself uses)
 mkdir -p ~/.local/bin
 ln -sf ~/.hermes/hermes-agent/venv/bin/notebooklm ~/.local/bin/notebooklm
 
-# 4. Authenticate. If `notebooklm login` triggers Google's 48h new-device
-#    cooldown, use the browser-session import described in the next section.
-notebooklm login
+# 4. Authenticate via your existing Chrome session — skips Google's new-device
+#    flow entirely. macOS: click "Always Allow" on the Keychain prompt (not just
+#    "Allow", or every refresh will re-prompt).
+notebooklm login --browser-cookies chrome
 
-# 5. Verify both the skill and the CLI are working
+# 5. Wire up auto-refresh so Google's PSIDTS rotation (every 15-30 min) self-heals.
+#    Hermes loads ~/.hermes/.env on startup, so this is the right place for it —
+#    ~/.zshrc would only cover interactive shells, not the Hermes subprocess.
+echo 'NOTEBOOKLM_REFRESH_CMD=notebooklm login --browser-cookies chrome' >> ~/.hermes/.env
+
+# 6. Verify the skill, CLI, and auto-refresh are all working
 hermes skills list                     # should include a `notebooklm` entry
-notebooklm auth check --test           # all rows should be ✓
+notebooklm auth check --test           # all rows should be ✓ including Token fetch
 notebooklm list                        # lists your NotebookLM notebooks
 ```
+
+**One-time set; runs forever.** After step 5, any Hermes session that calls a notebooklm RPC with stale cookies will transparently re-read fresh cookies from Chrome via rookiepy, rewrite `~/.notebooklm/profiles/default/storage_state.json`, and retry the original call — all inside a single process, one-shot per process so a broken refresh can't loop. See the [Authentication Options](#authentication-options) section below for the detailed mechanism and fallback methods if rookiepy can't access your browser.
 
 **Why `--force`, and the main-vs-tag caveat:**
 
@@ -287,8 +297,11 @@ notebooklm login --browser-cookies chrome
 # Verify it works
 notebooklm auth check --test   # all rows ✓
 
-# Set up auto-refresh so expiring cookies self-heal (add to ~/.zshrc or similar)
-export NOTEBOOKLM_REFRESH_CMD="notebooklm login --browser-cookies chrome"
+# Set up auto-refresh so expiring cookies self-heal.
+# For Hermes users: put it in ~/.hermes/.env so the Hermes subprocess picks it up.
+# For standalone use: export from ~/.zshrc / ~/.bashrc / similar.
+echo 'NOTEBOOKLM_REFRESH_CMD=notebooklm login --browser-cookies chrome' >> ~/.hermes/.env
+# or: export NOTEBOOKLM_REFRESH_CMD="notebooklm login --browser-cookies chrome"
 ```
 
 On macOS, the first `--browser-cookies chrome` call prompts Keychain for Chrome's cookie-decryption key. Grant once; it's cached.
