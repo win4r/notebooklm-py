@@ -273,10 +273,18 @@ notebooklm list                        # lists your NotebookLM notebooks
 `notebooklm login` spawns a fresh Playwright Chromium, which Google treats as a
 new device. After repeated fresh logins, Google may block new-device sign-in
 for ~48 hours. If you are already signed into NotebookLM in your main browser,
-you can reuse that session directly — no cooldown, no Playwright login flow.
+you can **bootstrap a short-lived session** by copying the browser's cookies.
 
-Your existing browser is an already-trusted device, so its session cookies work
-immediately when copied into the `storage_state.json` that this library reads.
+> ⚠️ **Short-lived only — 15 to 30 minutes.** Google rotates the session-binding
+> cookies (`__Secure-1PSIDTS` and `__Secure-3PSIDTS`) every few minutes. Real
+> browsers receive the new values via `Set-Cookie` and keep going; a static
+> `storage_state.json` does not. Once the rotation cycle passes, RPC calls
+> fail with "Authentication expired or invalid" even though `auth check`
+> still sees the file as structurally valid (until you re-run `--test`).
+>
+> Use this procedure to get unblocked while Google's cooldown clears, then
+> run `notebooklm login` for a persistent session. The browser cookie path
+> is **not a long-term replacement** for `notebooklm login`.
 
 ### Steps
 
@@ -327,9 +335,16 @@ immediately when copied into the `storage_state.json` that this library reads.
 - This repo's `.gitignore` already excludes `.notebooklm/`, `storage_state.json`,
   and `*cookies*.json` to prevent accidental commits, but you should still
   audit before pushing.
-- Cookies eventually expire (typically several months). When `notebooklm auth
-  check` starts failing, repeat this procedure — the browser remains a trusted
-  device so no 48-hour cooldown is triggered.
+- **Cookies go stale in 15-30 minutes, not months.** Google's `__Secure-*PSIDTS`
+  cookies are rotated server-side every few minutes; the static file this
+  script writes captures only the rotation snapshot at export time. When RPC
+  calls start returning "Authentication expired or invalid" (typically within
+  half an hour), either re-export from the browser or — preferably — run
+  `notebooklm login` for a Playwright-managed session that handles rotation.
+- When `notebooklm login` can't run (new-device cooldown, no display, etc.),
+  this procedure can be repeated indefinitely as short bursts, but the
+  underlying problem is that you're bypassing Google's CSRF protection.
+  Budget for `notebooklm login` as the long-term answer.
 - For higher-risk automation, consider using a dedicated Google account with
   no access to sensitive services, rather than your primary account.
 
