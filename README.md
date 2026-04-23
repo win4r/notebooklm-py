@@ -94,20 +94,20 @@ These features are available via API/CLI but not exposed in NotebookLM's web int
 
 ## Installation
 
-This fork is **audit-pinned to `v0.3.4`**. Install from the fork's git tag to stay on the version documented in [`SECURITY_AUDIT.md`](skills/notebooklm/SECURITY_AUDIT.md):
+This fork is **audit-pinned to tag `v0.3.4-hermes.1`** — upstream `v0.3.4` Python source plus this fork's Hermes layout, audit report, and import helper. Install from the fork tag to get a reproducible snapshot that matches [`SECURITY_AUDIT.md`](skills/notebooklm/SECURITY_AUDIT.md):
 
 ```bash
-# Basic installation (from this fork's audited tag)
-pip install "git+https://github.com/win4r/notebooklm-py@v0.3.4"
+# Basic installation (from this fork's audited Hermes tag)
+pip install "git+https://github.com/win4r/notebooklm-py@v0.3.4-hermes.1"
 
 # With browser login support (required for first-time setup)
-pip install "notebooklm-py[browser] @ git+https://github.com/win4r/notebooklm-py@v0.3.4"
+pip install "notebooklm-py[browser] @ git+https://github.com/win4r/notebooklm-py@v0.3.4-hermes.1"
 playwright install chromium
 ```
 
 If `playwright install chromium` fails with `TypeError: onExit is not a function`, see the Linux workaround in [Troubleshooting](docs/troubleshooting.md#linux).
 
-> **Why not `pip install notebooklm-py` from PyPI?** — Upstream's 0.3.4 PyPI wheel is unsigned (no [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) attestation) and generic install commands aren't version-pinned. Installing from this fork's git tag gives a reproducible, auditable source and activates the [upgrade guardrail](skills/notebooklm/SKILL.md). The `src/` directory is byte-identical to upstream `v0.3.4` — we verified with `diff` against `git show v0.3.4:src/notebooklm/__init__.py` — so you lose nothing by switching install paths.
+> **Why `v0.3.4-hermes.1` instead of plain `v0.3.4` or PyPI?** — The plain `v0.3.4` tag (inherited from upstream) contains only upstream's `src/` and no fork assets. The `-hermes.1` suffix marks "upstream v0.3.4 src + this fork's skills/SECURITY_AUDIT.md/import_browser_cookies.py on top". Upstream's PyPI wheel 0.3.4 is unsigned (no [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) attestation) and generic install commands aren't version-pinned. Installing from this fork's named tag gives a reproducible, auditable source and activates the [upgrade guardrail](skills/notebooklm/SKILL.md). The `src/` directory is byte-identical to upstream `v0.3.4` — verified with `diff` against `git show v0.3.4:src/notebooklm/__init__.py` — so there's no functional difference, only a trust-chain swap.
 >
 > If you explicitly need PyPI (e.g. corporate package mirror, no GitHub access), `pip install "notebooklm-py==0.3.4"` from upstream is functionally equivalent but skips fork-local assets (`SECURITY_AUDIT.md`, `import_browser_cookies.py`, Hermes skill layout).
 
@@ -244,7 +244,7 @@ hermes skills install win4r/notebooklm-py/skills/notebooklm --force
 
 ```bash
 VIRTUAL_ENV=~/.hermes/hermes-agent/venv uv pip install \
-  "notebooklm-py[browser] @ git+https://github.com/win4r/notebooklm-py@v0.3.4"
+  "notebooklm-py[browser] @ git+https://github.com/win4r/notebooklm-py@v0.3.4-hermes.1"
 ln -s ~/.hermes/hermes-agent/venv/bin/notebooklm ~/.local/bin/notebooklm
 ```
 
