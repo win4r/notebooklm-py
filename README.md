@@ -13,7 +13,8 @@
   <a href="https://trendshift.io/repositories/19116" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19116" alt="teng-lin%2Fnotebooklm-py | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </p>
 
-**Source & Development**: <https://github.com/teng-lin/notebooklm-py>
+**Upstream source**: <https://github.com/teng-lin/notebooklm-py>
+**This fork**: <https://github.com/win4r/notebooklm-py>
 
 > **⚠️ Unofficial Library - Use at Your Own Risk**
 >
@@ -25,9 +26,16 @@
 >
 > Best for prototypes, research, and personal projects. See [Troubleshooting](docs/troubleshooting.md) for debugging tips.
 
+> **This is [`win4r`'s fork](https://github.com/win4r/notebooklm-py)** — adds Hermes Agent compatibility and security hardening on top of [upstream](https://github.com/teng-lin/notebooklm-py).
+>
+> - **Python source unchanged.** Fork's `src/` is byte-identical to upstream tag `v0.3.4`; we do not republish to PyPI.
+> - **Hermes-ready layout.** [`skills/notebooklm/SKILL.md`](skills/notebooklm/SKILL.md) satisfies Hermes's 3-part identifier requirement (`owner/repo/path`) that the upstream root-level SKILL.md doesn't.
+> - **Audit pinned.** Install commands below resolve the audited tag (see [`SECURITY_AUDIT.md`](skills/notebooklm/SECURITY_AUDIT.md)), not `latest`.
+> - **For vanilla non-Hermes use**, prefer [upstream](https://github.com/teng-lin/notebooklm-py) directly — it gets updates first.
+
 ## What You Can Build
 
-🤖 **AI Agent Tools** - Integrate NotebookLM into Claude Code, Codex, and other LLM agents. Ships with a root [NotebookLM skill](SKILL.md) for GitHub and `npx skills add` discovery, local `notebooklm skill install` support for Claude Code and `.agents` skill directories, and repo-level Codex guidance in [`AGENTS.md`](AGENTS.md).
+🤖 **AI Agent Tools** - Integrate NotebookLM into Claude Code, Codex, Hermes Agent, OpenClaw, and other LLM agents. Ships with a root [NotebookLM skill](SKILL.md) for `npx skills add` / `notebooklm skill install` (Claude Code, `.agents/`, OpenClaw), a [`skills/notebooklm/`](skills/notebooklm/SKILL.md) subdirectory layout for `hermes skills install`, and repo-level Codex guidance in [`AGENTS.md`](AGENTS.md).
 
 📚 **Research Automation** - Bulk-import sources (URLs, PDFs, YouTube, Google Drive), run web/Drive research queries with auto-import, and extract insights programmatically. Build repeatable research pipelines.
 
@@ -86,26 +94,32 @@ These features are available via API/CLI but not exposed in NotebookLM's web int
 
 ## Installation
 
+This fork is **audit-pinned to `v0.3.4`**. Install from the fork's git tag to stay on the version documented in [`SECURITY_AUDIT.md`](skills/notebooklm/SECURITY_AUDIT.md):
+
 ```bash
-# Basic installation
-pip install notebooklm-py
+# Basic installation (from this fork's audited tag)
+pip install "git+https://github.com/win4r/notebooklm-py@v0.3.4"
 
 # With browser login support (required for first-time setup)
-pip install "notebooklm-py[browser]"
+pip install "notebooklm-py[browser] @ git+https://github.com/win4r/notebooklm-py@v0.3.4"
 playwright install chromium
 ```
 
 If `playwright install chromium` fails with `TypeError: onExit is not a function`, see the Linux workaround in [Troubleshooting](docs/troubleshooting.md#linux).
+
+> **Why not `pip install notebooklm-py` from PyPI?** — Upstream's 0.3.4 PyPI wheel is unsigned (no [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) attestation) and generic install commands aren't version-pinned. Installing from this fork's git tag gives a reproducible, auditable source and activates the [upgrade guardrail](skills/notebooklm/SKILL.md). The `src/` directory is byte-identical to upstream `v0.3.4` — we verified with `diff` against `git show v0.3.4:src/notebooklm/__init__.py` — so you lose nothing by switching install paths.
+>
+> If you explicitly need PyPI (e.g. corporate package mirror, no GitHub access), `pip install "notebooklm-py==0.3.4"` from upstream is functionally equivalent but skips fork-local assets (`SECURITY_AUDIT.md`, `import_browser_cookies.py`, Hermes skill layout).
 
 ### Development Installation
 
 For contributors or testing unreleased features:
 
 ```bash
-pip install git+https://github.com/teng-lin/notebooklm-py@main
+pip install "git+https://github.com/win4r/notebooklm-py@main"
 ```
 
-⚠️ The main branch may contain unstable changes. Use PyPI releases for production.
+⚠️ The fork's `main` tracks upstream `main` plus this fork's Hermes-specific additions. It may contain unstable changes; use the tagged command above for production.
 
 ## Quick Start
 
@@ -203,7 +217,7 @@ asyncio.run(main())
 
 ### Agent Setup
 
-**Option 1 — CLI install**:
+**Option 1 — CLI install** (Claude Code, `.agents/`, OpenClaw):
 
 ```bash
 notebooklm skill install
@@ -211,13 +225,28 @@ notebooklm skill install
 
 Installs the skill into `~/.claude/skills/notebooklm` and `~/.agents/skills/notebooklm`.
 
-**Option 2 — `npx` install** (via the open skills ecosystem):
+**Option 2 — `npx` install** (open skills ecosystem):
 
 ```bash
-npx skills add teng-lin/notebooklm-py
+npx skills add win4r/notebooklm-py
 ```
 
-Fetches the canonical [SKILL.md](SKILL.md) directly from GitHub.
+Fetches [SKILL.md](SKILL.md) directly from this fork. For the upstream canonical copy, substitute `teng-lin/notebooklm-py`.
+
+**Option 3 — Hermes Agent** (uses the [`skills/notebooklm/`](skills/notebooklm/) subdirectory layout):
+
+```bash
+hermes skills tap add win4r/notebooklm-py
+hermes skills install win4r/notebooklm-py/skills/notebooklm --force
+```
+
+`--force` is required because Hermes's skills-guard flags the embedded `pip install` strings in SKILL.md as supply-chain signals — this is expected. See [`SECURITY_AUDIT.md`](skills/notebooklm/SECURITY_AUDIT.md) for the decision rationale and the upgrade protocol. After installing, grab the Python package into the Hermes venv:
+
+```bash
+VIRTUAL_ENV=~/.hermes/hermes-agent/venv uv pip install \
+  "notebooklm-py[browser] @ git+https://github.com/win4r/notebooklm-py@v0.3.4"
+ln -s ~/.hermes/hermes-agent/venv/bin/notebooklm ~/.local/bin/notebooklm
+```
 
 
 ## Importing Authentication from an Existing Browser
