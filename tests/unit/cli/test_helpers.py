@@ -1,6 +1,7 @@
 """Tests for CLI helper functions."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -651,6 +652,7 @@ class TestImportWithRetry:
                 [{"id": "src_1", "title": "Source 1"}],
             ]
         )
+        client.sources.list = AsyncMock(return_value=[])
 
         with (
             patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
@@ -671,6 +673,80 @@ class TestImportWithRetry:
         mock_console.print.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_timeout_recovers_imported_sources_without_retrying_duplicate_batch(self):
+        client = MagicMock()
+        client.research.import_sources = AsyncMock(
+            side_effect=[RPCTimeoutError("Timed out", timeout_seconds=30.0)]
+        )
+        client.sources.list = AsyncMock(
+            side_effect=[
+                [],
+                [SimpleNamespace(id="src_1", title="Source 1", url="https://example.com")],
+            ]
+        )
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("notebooklm.cli.helpers.console") as mock_console,
+        ):
+            imported = await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                [{"url": "https://example.com", "title": "Source 1"}],
+                initial_delay=5,
+                max_delay=60,
+            )
+
+        assert imported == [{"id": "src_1", "title": "Source 1"}]
+        assert client.research.import_sources.await_count == 1
+        mock_sleep.assert_not_awaited()
+        mock_console.print.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_timeout_retries_only_remaining_sources_after_partial_recovery(self):
+        client = MagicMock()
+        client.research.import_sources = AsyncMock(
+            side_effect=[
+                RPCTimeoutError("Timed out", timeout_seconds=30.0),
+                [{"id": "src_2", "title": "Source 2"}],
+            ]
+        )
+        client.sources.list = AsyncMock(
+            side_effect=[
+                [],
+                [SimpleNamespace(id="src_1", title="Source 1", url="https://example.com/1")],
+            ]
+        )
+        sources = [
+            {"url": "https://example.com/1", "title": "Source 1"},
+            {"url": "https://example.com/2", "title": "Source 2"},
+        ]
+
+        with (
+            patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("notebooklm.cli.helpers.console") as mock_console,
+        ):
+            imported = await import_with_retry(
+                client,
+                "nb_123",
+                "task_123",
+                sources,
+                initial_delay=5,
+                max_delay=60,
+            )
+
+        assert imported == [
+            {"id": "src_1", "title": "Source 1"},
+            {"id": "src_2", "title": "Source 2"},
+        ]
+        assert client.research.import_sources.await_count == 2
+        retry_args = client.research.import_sources.await_args_list[1].args[2]
+        assert retry_args == [{"url": "https://example.com/2", "title": "Source 2"}]
+        mock_sleep.assert_awaited_once_with(5)
+        mock_console.print.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_retries_silently_for_json_output(self):
         client = MagicMock()
         client.research.import_sources = AsyncMock(
@@ -679,6 +755,7 @@ class TestImportWithRetry:
                 [],
             ]
         )
+        client.sources.list = AsyncMock(return_value=[])
 
         with (
             patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock),
@@ -699,6 +776,7 @@ class TestImportWithRetry:
         client = MagicMock()
         error = RPCTimeoutError("Timed out", timeout_seconds=30.0)
         client.research.import_sources = AsyncMock(side_effect=error)
+        client.sources.list = AsyncMock(return_value=[])
 
         with (
             patch("notebooklm.cli.helpers.time.monotonic", side_effect=[0.0, 1801.0]),
@@ -719,6 +797,7 @@ class TestImportWithRetry:
     async def test_does_not_retry_non_timeout_error(self):
         client = MagicMock()
         client.research.import_sources = AsyncMock(side_effect=ValueError("boom"))
+        client.sources.list = AsyncMock(return_value=[])
 
         with (
             patch("notebooklm.cli.helpers.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
