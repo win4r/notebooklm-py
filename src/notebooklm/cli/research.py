@@ -87,8 +87,15 @@ def research_status(ctx, notebook_id, json_output, client_auth):
                 query = status.get("query", "")
                 sources = status.get("sources", [])
                 summary = status.get("summary", "")
+                research_source_count = status.get("research_source_count", len(sources))
+                has_report = status.get("has_report", bool(status.get("report", "")))
                 console.print(f"[green]Research completed:[/green] {query}")
                 display_research_sources(sources)
+                console.print(
+                    f"[dim]Research results: {research_source_count} items"
+                    f" · report: {'yes' if has_report else 'no'}"
+                    " · notebook import required before they appear in 'source list'[/dim]"
+                )
 
                 if summary:
                     console.print(f"\n[bold]Summary:[/bold]\n{summary[:500]}")

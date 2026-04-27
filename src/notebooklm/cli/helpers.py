@@ -76,6 +76,72 @@ def run_async(coro):
     return asyncio.run(coro)
 
 
+def _normalize_import_key(source: dict) -> tuple[str, str] | None:
+    """Build a stable matching key for a research source import candidate."""
+    if not isinstance(source, dict):
+        return None
+
+    url = source.get("url")
+    if isinstance(url, str) and url:
+        return ("url", url)
+
+    title = source.get("title")
+    if isinstance(title, str) and title:
+        return ("title", title)
+
+    return None
+
+
+def _source_object_import_key(source) -> tuple[str, str] | None:
+    """Build the same stable key from a Source object returned by sources.list()."""
+    url = getattr(source, "url", None)
+    if isinstance(url, str) and url:
+        return ("url", url)
+
+    title = getattr(source, "title", None)
+    if isinstance(title, str) and title:
+        return ("title", title)
+
+    return None
+
+
+async def _find_newly_imported_sources(
+    client,
+    notebook_id: str,
+    expected_sources: list[dict],
+    baseline_source_ids: set[str],
+) -> list[dict[str, str]]:
+    """Inspect notebook sources and return newly imported matches for expected sources."""
+    current_sources = await client.sources.list(notebook_id)
+    expected_key_order = [
+        key for source in expected_sources if (key := _normalize_import_key(source)) is not None
+    ]
+    if not expected_key_order:
+        return []
+
+    available_by_key: dict[tuple[str, str], list[dict[str, str]]] = {}
+    for source in current_sources:
+        source_id = getattr(source, "id", None)
+        if not isinstance(source_id, str) or source_id in baseline_source_ids:
+            continue
+
+        key = _source_object_import_key(source)
+        if key is None:
+            continue
+
+        available_by_key.setdefault(key, []).append(
+            {"id": source_id, "title": getattr(source, "title", "") or ""}
+        )
+
+    matched: list[dict[str, str]] = []
+    for key in expected_key_order:
+        bucket = available_by_key.get(key)
+        if bucket:
+            matched.append(bucket.pop(0))
+
+    return matched
+
+
 async def import_with_retry(
     client,
     notebook_id: str,
@@ -92,15 +158,43 @@ async def import_with_retry(
 
     This is intentionally CLI-only policy. Library consumers calling
     `client.research.import_sources()` directly still get one-shot behavior.
+
+    Important: IMPORT_RESEARCH can time out even when the server already created
+    notebook sources. Before retrying, re-check the notebook and stop if all
+    requested sources already appeared; otherwise retry only the remaining ones.
     """
     started_at = time.monotonic()
     delay = initial_delay
     attempt = 1
+    baseline_source_ids = {
+        source.id for source in await client.sources.list(notebook_id) if isinstance(source.id, str)
+    }
+    pending_sources = list(sources)
+    imported_matches: list[dict[str, str]] = []
 
-    while True:
+    while pending_sources:
         try:
-            return await client.research.import_sources(notebook_id, task_id, sources)
+            imported = await client.research.import_sources(notebook_id, task_id, pending_sources)
+            return imported_matches + imported
         except RPCTimeoutError:
+            recovered = await _find_newly_imported_sources(
+                client,
+                notebook_id,
+                pending_sources,
+                baseline_source_ids,
+            )
+            if recovered:
+                imported_matches.extend(recovered)
+                baseline_source_ids.update(item["id"] for item in recovered)
+                recovered_count = len(recovered)
+                pending_sources = pending_sources[recovered_count:]
+                if not pending_sources:
+                    logger.warning(
+                        "IMPORT_RESEARCH timed out for notebook %s but all requested sources appeared in notebook; suppressing retry",
+                        notebook_id,
+                    )
+                    return imported_matches
+
             elapsed = time.monotonic() - started_at
             remaining = max_elapsed - elapsed
             if remaining <= 0:
@@ -108,20 +202,23 @@ async def import_with_retry(
 
             sleep_for = min(delay, max_delay, remaining)
             logger.warning(
-                "IMPORT_RESEARCH timed out for notebook %s; retrying in %.1fs (attempt %d, %.1fs elapsed)",
+                "IMPORT_RESEARCH timed out for notebook %s; retrying in %.1fs (attempt %d, %.1fs elapsed, %d sources still pending)",
                 notebook_id,
                 sleep_for,
                 attempt + 1,
                 elapsed,
+                len(pending_sources),
             )
             if not json_output:
                 console.print(
                     f"[yellow]Import timed out; retrying in {sleep_for:.0f}s "
-                    f"(attempt {attempt + 1})[/yellow]"
+                    f"(attempt {attempt + 1}, {len(pending_sources)} still pending)[/yellow]"
                 )
             await asyncio.sleep(sleep_for)
             delay = min(delay * backoff_factor, max_delay)
             attempt += 1
+
+    return imported_matches
 
 
 # =============================================================================

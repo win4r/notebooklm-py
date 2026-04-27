@@ -52,6 +52,8 @@ class TestResearchStatus:
                         {"title": "Source 1", "url": "http://example.com/1"},
                         {"title": "Source 2", "url": "http://example.com/2"},
                     ],
+                    "research_source_count": 39,
+                    "has_report": True,
                     "summary": "This is a summary of the research results.",
                     "report": "# Research Report\nDetailed findings here.",
                 }
@@ -63,7 +65,34 @@ class TestResearchStatus:
         assert result.exit_code == 0
         assert "Research completed" in result.output
         assert "Found 2 sources" in result.output
+        assert "Research results: 39 items" in result.output
         assert "Source 1" in result.output
+        assert "Research Report" in result.output
+
+    def test_status_completed_without_imported_sources_explains_scope(self, runner, mock_auth, mock_fetch_tokens):
+        with patch_client_for_module("research") as mock_client_cls:
+            mock_client = create_mock_client()
+            mock_client.research.poll = AsyncMock(
+                return_value={
+                    "status": "completed",
+                    "query": "AI research",
+                    "sources": [],
+                    "research_source_count": 39,
+                    "has_report": True,
+                    "summary": "",
+                    "report": "# Research Report\nDetailed findings here.",
+                }
+            )
+            mock_client_cls.return_value = mock_client
+
+            result = runner.invoke(cli, ["research", "status", "-n", "nb_123"])
+
+        assert result.exit_code == 0
+        assert "Found 0 sources" in result.output
+        assert "Research results: 39 items" in result.output
+        assert "report: yes" in result.output
+        assert "notebook import required" in result.output
+        assert "source list" in result.output
         assert "Research Report" in result.output
 
     def test_status_completed_with_many_sources(self, runner, mock_auth, mock_fetch_tokens):
