@@ -179,7 +179,14 @@ class ResearchAPI:
         )
 
         if not result or not isinstance(result, list) or len(result) == 0:
-            return {"status": "no_research", "tasks": []}
+            return {
+                "status": "no_research",
+                "tasks": [],
+                "research_source_count": 0,
+                "has_report": False,
+                "results_scope": "research_results",
+                "requires_import": False,
+            }
 
         # Unwrap if needed
         if isinstance(result[0], list) and len(result[0]) > 0 and isinstance(result[0][0], list):
@@ -287,12 +294,25 @@ class ResearchAPI:
 
         if parsed_tasks:
             latest_task = parsed_tasks[0]
+            latest_sources = latest_task.get("sources", [])
+            latest_report = latest_task.get("report", "")
             return {
                 **latest_task,
                 "tasks": parsed_tasks,
+                "research_source_count": len(latest_sources),
+                "has_report": bool(latest_report),
+                "results_scope": "research_results",
+                "requires_import": bool(latest_sources),
             }
 
-        return {"status": "no_research", "tasks": []}
+        return {
+            "status": "no_research",
+            "tasks": [],
+            "research_source_count": 0,
+            "has_report": False,
+            "results_scope": "research_results",
+            "requires_import": False,
+        }
 
     async def import_sources(
         self,

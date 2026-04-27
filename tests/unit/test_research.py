@@ -142,6 +142,10 @@ class TestResearch:
         assert result["sources"][0]["result_type"] == 1
         assert result["summary"] == "Summary text"
         assert result["report"] == ""
+        assert result["research_source_count"] == 1
+        assert result["has_report"] is False
+        assert result["results_scope"] == "research_results"
+        assert result["requires_import"] is True
         assert len(result["tasks"]) == 1
         assert result["tasks"][0]["task_id"] == "task_123"
 
@@ -247,6 +251,30 @@ class TestResearch:
 
         assert result["status"] == "in_progress"
         assert result["query"] == "research query"
+        assert result["research_source_count"] == 0
+        assert result["has_report"] is False
+        assert result["results_scope"] == "research_results"
+        assert result["requires_import"] is False
+
+    @pytest.mark.asyncio
+    async def test_poll_no_research_includes_scope_metadata(
+        self, auth_tokens, httpx_mock, build_rpc_response
+    ):
+        """Test empty poll response still explains research-results scope."""
+        response_body = build_rpc_response(RPCMethod.POLL_RESEARCH, [])
+        httpx_mock.add_response(content=response_body.encode(), method="POST")
+
+        async with NotebookLMClient(auth_tokens) as client:
+            result = await client.research.poll("nb_123")
+
+        assert result == {
+            "status": "no_research",
+            "tasks": [],
+            "research_source_count": 0,
+            "has_report": False,
+            "results_scope": "research_results",
+            "requires_import": False,
+        }
 
     @pytest.mark.asyncio
     async def test_poll_deep_research_sources(self, auth_tokens, httpx_mock, build_rpc_response):
@@ -336,6 +364,10 @@ class TestResearch:
         assert result["sources"][0]["report_markdown"] == "# Current report markdown"
         assert result["sources"][0]["research_task_id"] == "report_123"
         assert result["report"] == "# Current report markdown"
+        assert result["research_source_count"] == 1
+        assert result["has_report"] is True
+        assert result["results_scope"] == "research_results"
+        assert result["requires_import"] is True
 
     @pytest.mark.asyncio
     async def test_poll_fast_research_string_drive_result_type(
